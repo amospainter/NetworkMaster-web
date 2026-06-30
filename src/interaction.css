@@ -1,0 +1,148 @@
+.links .link-hit {
+  stroke: transparent;
+  stroke-width: 28;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/*
+ * SVG uses a 100×100 logical viewBox, so the original fractional stroke was
+ * effectively hairline-thin on large screens. Keep the rendered line legible
+ * while the transparent path above provides a much larger touch target.
+ */
+.links path:not(.link-hit) {
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+.links path.active:not(.link-hit) {
+  stroke-width: 3.5px;
+}
+
+.links path.congested:not(.link-hit),
+.links path.failed:not(.link-hit) {
+  stroke-width: 4px;
+}
+
+.links path.selected:not(.link-hit) {
+  stroke-width: 5px;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
+.links .wireless-link {
+  stroke: #28a9c5;
+  stroke-width: 2px;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.device {
+  touch-action: none;
+  user-select: none;
+}
+
+.wifi-zone {
+  position: absolute;
+  z-index: 0;
+  transform: translate(-50%, -50%);
+  border: 1px dashed #28a9c5;
+  border-radius: 50%;
+  background: color-mix(in srgb, #28a9c5 7%, transparent);
+  pointer-events: none;
+}
+
+.wifi-zone span {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  color: #28a9c5;
+  font:
+    8px 'DM Mono',
+    monospace;
+  white-space: nowrap;
+}
+
+.device.phone > span,
+.device.tablet > span {
+  color: #28a9c5;
+}
+
+.device .wifi-badge {
+  color: #28a9c5;
+  font-weight: 700;
+}
+
+.device .wifi-badge.out-of-range {
+  color: var(--red);
+}
+
+.danger-action {
+  color: var(--red);
+}
+
+.upgrade-nav {
+  color: #15212b !important;
+  background: var(--lime) !important;
+  font-weight: 800;
+}
+
+.device-upgrades {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.device-upgrades button,
+.upgrade-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: left;
+}
+
+.device-upgrades button:hover,
+.upgrade-list button:hover {
+  border-color: #15978d;
+  background: var(--grid);
+}
+
+.upgrade-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.upgrade-list button > span {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+}
+
+.upgrade-list svg {
+  grid-row: 1 / 3;
+  color: #15978d;
+}
+
+.upgrade-list small {
+  color: var(--muted);
+}
+
+.upgrade-list strong {
+  font-family: 'DM Mono', monospace;
+  color: #15978d;
+}
+
+@media (max-width: 600px) {
+  .upgrade-nav {
+    font-size: 0;
+  }
+  .upgrade-nav svg {
+    width: 20px;
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "networkmaster-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run test && npm run build && npm run format:check"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "latest",
+    "lucide-vue-next": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.9.2",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.4",
+    "typescript-eslint": "^8.62.1",
+    "vitest": "latest",
+    "vue-eslint-parser": "^10.4.1"
+  }
+}
