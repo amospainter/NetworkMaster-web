@@ -52,9 +52,9 @@ Coordinates are stored as percentages so one topology works across iPad and desk
 
 - Active run key: `networkmaster.active-run.v1`
 - High score key: `networkmaster.best.v1`
-- Current `GameState.version`: `2`
+- Current `GameState.version`: `3`
 
-Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced.
+Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3; `App.vue`'s loader delegates to it.
 
 ## Gameplay invariants
 
@@ -67,6 +67,10 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - Failure pressure is the total loss across the latest 20 ticks divided by the 30-drop threshold.
 - Cable tiers, capacities, and upgrade prices must remain ordered in `CABLE_TIERS`.
 - Infrastructure and site upgrades must check budget before changing state.
+- Traffic eases in over each scenario's `warmupTicks` from `warmupFloor` to full (native `warmupFactor`); the opening minutes stay quiet.
+- Challenge events roll every 90 ticks from a scenario's `challengeStart` (native roster: traffic spike, budget bonus, device surge, and — only when `equipmentFailure` is set — equipment failure). A traffic spike doubles one source's demand for 10 ticks via `activeEvents`.
+- Delivery-count milestones (`MILESTONES`) each pay a one-time budget award, recorded in `milestonesReached`.
+- Game over adds a `networkHealthBonus` to the score: surviving-source ratio times lifetime delivery ratio, scaled to 1000.
 
 ## Code standards
 

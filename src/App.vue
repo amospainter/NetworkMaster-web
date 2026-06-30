@@ -36,6 +36,7 @@ import {
   deleteCable,
   deviceRemovalRefund,
   independentPathCount,
+  migrateSavedGame,
   moveDevice,
   newGame,
   repairDevice,
@@ -80,15 +81,10 @@ const BUILD_OPTIONS: [DeviceKind, string, number][] = [
 /** Loads only the current save schema; incompatible prototypes start cleanly. */
 const loadSavedGame = () => {
   try {
-    const savedGame = JSON.parse(
-      localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 'null',
-    ) as GameState | null
-    if (savedGame?.version !== 2) return null
-    savedGame.devices.forEach((device) => {
-      device.upgradeSpend ??= 0
-      device.firewallRule ??= null
-    })
-    return savedGame
+    const savedGame = JSON.parse(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 'null') as
+      (GameState & { version: number }) | null
+    if (!savedGame) return null
+    return migrateSavedGame(savedGame)
   } catch {
     return null
   }

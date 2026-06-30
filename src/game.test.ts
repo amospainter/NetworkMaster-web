@@ -7,19 +7,22 @@ import {
   cycleFirewallRule,
   findRoute,
   independentPathCount,
+  migrateSavedGame,
   moveDevice,
+  networkHealthBonus,
   newGame,
   removeDevice,
   SCENARIOS,
   simulate,
   upgradeCable,
 } from './game'
+import type { GameState } from './types'
 
 describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(2)
+      expect(game.version).toBe(3)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -101,6 +104,62 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.cables.some((cable) => cable.id === attachedCable.id)).toBe(false)
     expect(game.budget).toBe(487) // $72 equipment + $45 cable salvage
     expect(game.events[0]).toContain('$117 salvage')
+  })
+
+  it('initializes the version 3 schema with empty progression state', () => {
+    const game = newGame('home')
+    expect(game.version).toBe(3)
+    expect(game.milestonesReached).toEqual([])
+    expect(game.activeEvents).toEqual([])
+    for (const scenario of SCENARIOS) {
+      expect(scenario.warmupFloor).toBeGreaterThan(0)
+      expect(scenario.warmupFloor).toBeLessThanOrEqual(1)
+      expect(scenario.warmupTicks).toBeGreaterThan(0)
+      expect(scenario.challengeStart).toBeGreaterThan(0)
+    }
+  })
+
+  it('migrates a version 2 save and rejects incompatible schemas', () => {
+    const legacy = { ...newGame('home'), version: 2 } as unknown as {
+      version: number
+      devices: Record<string, unknown>[]
+    } & Partial<Omit<GameState, 'version' | 'devices'>>
+    legacy.devices.forEach((device) => {
+      delete device.upgradeSpend
+      delete device.firewallRule
+    })
+    delete legacy.milestonesReached
+    delete legacy.activeEvents
+    const migrated = migrateSavedGame(legacy as unknown as { version: number })
+    expect(migrated?.version).toBe(3)
+    expect(migrated?.milestonesReached).toEqual([])
+    expect(migrated?.activeEvents).toEqual([])
+    expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
+    expect(migrateSavedGame({ version: 1 })).toBeNull()
+  })
+
+  it('awards a delivery milestone exactly once', () => {
+    let game = newGame('home')
+    game.delivered = 30 // past the home 25-packet milestone
+    const budgetBefore = game.budget
+    game = simulate(game)
+    expect(game.milestonesReached).toContain(25)
+    expect(game.budget).toBeGreaterThanOrEqual(budgetBefore + 50)
+    const milestoneCount = game.milestonesReached.filter((m) => m === 25).length
+    game = simulate(game)
+    expect(game.milestonesReached.filter((m) => m === 25).length).toBe(milestoneCount)
+  })
+
+  it('scores network health from device retention and delivery ratio', () => {
+    const game = newGame('home')
+    game.spawned = 4
+    const sources = game.devices.filter((device) => ['pc', 'tv', 'console'].includes(device.kind))
+    sources.forEach((device) => {
+      device.generated = 10
+      device.delivered = 5
+    })
+    // 3 surviving sources / 4 spawned * (delivered 15 / generated 30) * 1000 = 375
+    expect(networkHealthBonus(game)).toBe(375)
   })
 
   it('enforces cable VLAN tags during route finding', () => {

@@ -20,13 +20,16 @@ This web port uses the Swift game and architecture documents in `../NetworkMaste
 - Equipment removal with attached-cable cleanup and 90% build/upgrade salvage
 - Cable VLAN tags and configurable PC/TV/console firewall block rules
 - Native 15% site-upgrade discount and bulk switch-throughput upgrade
+- Per-scenario warm-up demand easing (`warmupFloor`/`warmupTicks`)
+- Challenge-event roster: traffic spike, budget bonus, device surge, and equipment-failure event
+- Delivery-count milestone budget awards
+- Game-over network-health score bonus (surviving-source ratio × lifetime delivery ratio)
 
 ## Remaining native-only systems
 
 - Real per-device and per-cable packet buffers with strict priority admission
 - Cross-subnet traffic destinations
 - Endpoint cable rerouting and diagonal cable drawing
-- Full challenge-event roster (traffic spike, budget bonus, device surge, equipment-failure event)
 - Wi-Fi interference events and access-point client balancing
 - Seeded deterministic replay, latency/queue-delay telemetry, and full leaderboard history
 - Native tutorial sequence, Jackie advisor, minimap, zoom/pan canvas, audio/haptics, and accessibility custom actions

@@ -57,6 +57,17 @@ export type Cable = {
   failedTicks: number
 }
 
+/** Kinds of timed challenge event the simulation can roll, mirroring the native roster. */
+export type ChallengeEventKind = 'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure'
+
+/** A timed challenge event; only `trafficSpike` lingers across ticks via `ticksRemaining`. */
+export type ActiveEvent = {
+  id: string
+  kind: ChallengeEventKind
+  ticksRemaining: number
+  targetId: string | null
+}
+
 /** A packet moving between adjacent devices along a precomputed route. */
 export type Packet = {
   id: string
@@ -70,7 +81,7 @@ export type Packet = {
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
-  version: 2
+  version: 3
   phase: 'playing' | 'paused' | 'gameover'
   scenario: string
   tick: number
@@ -92,6 +103,10 @@ export type GameState = {
   spawned: number
   seed: number
   unscored: boolean
+  /** Delivery-count milestones already awarded, so each pays out only once. */
+  milestonesReached: number[]
+  /** Timed challenge events currently in effect (e.g. an active traffic spike). */
+  activeEvents: ActiveEvent[]
 }
 
 /** Scenario presentation plus its simulation pacing thresholds. */
@@ -106,4 +121,10 @@ export type Scenario = {
   rampStart: number
   spawnStart: number
   gameOverCheck: number
+  /** Tick at which timed challenge events begin rolling. */
+  challengeStart: number
+  /** Starting traffic fraction at tick 0 (0 = silent, 1 = full base rate). */
+  warmupFloor: number
+  /** Tick at which traffic eases up to 100% of the base rate. */
+  warmupTicks: number
 }

@@ -21,6 +21,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 180,
     spawnStart: 150,
     gameOverCheck: 80,
+    challengeStart: 180,
+    warmupFloor: 0.2,
+    warmupTicks: 180,
   },
   {
     id: 'startup',
@@ -33,6 +36,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 120,
     spawnStart: 120,
     gameOverCheck: 60,
+    challengeStart: 120,
+    warmupFloor: 0.3,
+    warmupTicks: 120,
   },
   {
     id: 'corporate',
@@ -45,6 +51,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 90,
     spawnStart: 105,
     gameOverCheck: 50,
+    challengeStart: 105,
+    warmupFloor: 0.45,
+    warmupTicks: 90,
   },
   {
     id: 'isp',
@@ -57,6 +66,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 75,
     spawnStart: 90,
     gameOverCheck: 45,
+    challengeStart: 90,
+    warmupFloor: 0.5,
+    warmupTicks: 75,
   },
   {
     id: 'metro',
@@ -69,6 +81,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 90,
     spawnStart: 100,
     gameOverCheck: 50,
+    challengeStart: 100,
+    warmupFloor: 0.5,
+    warmupTicks: 90,
   },
   {
     id: 'arena',
@@ -81,6 +96,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 70,
     spawnStart: 80,
     gameOverCheck: 45,
+    challengeStart: 80,
+    warmupFloor: 0.5,
+    warmupTicks: 70,
   },
   {
     id: 'edge',
@@ -93,6 +111,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 60,
     spawnStart: 75,
     gameOverCheck: 40,
+    challengeStart: 75,
+    warmupFloor: 0.5,
+    warmupTicks: 60,
   },
   {
     id: 'branch',
@@ -105,6 +126,9 @@ export const SCENARIOS: Scenario[] = [
     rampStart: 75,
     spawnStart: 90,
     gameOverCheck: 45,
+    challengeStart: 90,
+    warmupFloor: 0.4,
+    warmupTicks: 75,
   },
 ]
 
@@ -304,7 +328,7 @@ export function newGame(scenario = 'home'): GameState {
       ).length),
   )
   return {
-    version: 2,
+    version: 3,
     phase: 'playing',
     scenario: scenarioConfig.id,
     tick: 0,
@@ -325,7 +349,111 @@ export function newGame(scenario = 'home'): GameState {
     spawned: topology.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0).length,
     seed: Math.floor(Math.random() * 0xffffffff),
     unscored: false,
+    milestonesReached: [],
+    activeEvents: [],
   }
+}
+
+/**
+ * Per-scenario delivery-count milestones and their one-time budget awards,
+ * mirroring the native `checkMilestones`. Rewards scale with scenario difficulty.
+ */
+const MILESTONES: Record<string, { at: number; award: number }[]> = {
+  home: [
+    { at: 25, award: 50 },
+    { at: 75, award: 100 },
+    { at: 150, award: 200 },
+  ],
+  startup: [
+    { at: 40, award: 50 },
+    { at: 120, award: 100 },
+    { at: 240, award: 200 },
+  ],
+  corporate: [
+    { at: 60, award: 50 },
+    { at: 180, award: 100 },
+    { at: 360, award: 200 },
+  ],
+  isp: [
+    { at: 80, award: 75 },
+    { at: 240, award: 150 },
+    { at: 480, award: 300 },
+  ],
+  metro: [
+    { at: 100, award: 100 },
+    { at: 300, award: 200 },
+    { at: 600, award: 400 },
+  ],
+  arena: [
+    { at: 120, award: 125 },
+    { at: 360, award: 250 },
+    { at: 720, award: 500 },
+  ],
+  edge: [
+    { at: 150, award: 150 },
+    { at: 450, award: 300 },
+    { at: 900, award: 600 },
+  ],
+  branch: [
+    { at: 90, award: 100 },
+    { at: 270, award: 200 },
+    { at: 540, award: 400 },
+  ],
+}
+
+/**
+ * Eases demand in over a scenario's opening ticks so the network starts quiet
+ * and the player can connect devices before traffic reaches full intensity.
+ * Mirrors the native `warmupFactor`.
+ */
+function warmupFactor(tick: number, scenario: Scenario): number {
+  if (tick >= scenario.warmupTicks) return 1
+  const progress = tick / scenario.warmupTicks
+  return scenario.warmupFloor + (1 - scenario.warmupFloor) * progress
+}
+
+/** Returns the active traffic-spike multiplier for a device (2x while spiked). */
+function trafficSpikeMultiplier(state: GameState, deviceId: string): number {
+  return state.activeEvents.some(
+    (event) => event.kind === 'trafficSpike' && event.targetId === deviceId,
+  )
+    ? 2
+    : 1
+}
+
+/**
+ * Game-over score bonus rewarding a network that stayed intact and kept
+ * delivering. Mirrors the native `calculateNetworkHealth`: the product of the
+ * surviving-source ratio and the lifetime delivery ratio, scaled to 1000.
+ */
+export function networkHealthBonus(state: GameState): number {
+  const sources = state.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0)
+  const totalGenerated = sources.reduce((total, device) => total + device.generated, 0)
+  if (totalGenerated <= 0) return 0
+  const totalDelivered = sources.reduce((total, device) => total + device.delivered, 0)
+  const deviceRatio = sources.length / Math.max(1, state.spawned)
+  const deliveryRatio = totalDelivered / totalGenerated
+  return Math.round(deviceRatio * deliveryRatio * 1000)
+}
+
+/**
+ * Upgrades a persisted save to the current schema, or returns null if it is too
+ * old to migrate safely. Version 2 runs predate challenge events and milestones,
+ * so those fields are backfilled; older or malformed saves are discarded.
+ */
+export function migrateSavedGame(
+  savedGame: { version: number } & Partial<Omit<GameState, 'version'>>,
+): GameState | null {
+  if (savedGame.version === 2) {
+    savedGame.devices?.forEach((device) => {
+      device.upgradeSpend ??= 0
+      device.firewallRule ??= null
+    })
+    savedGame.milestonesReached ??= []
+    savedGame.activeEvents ??= []
+    savedGame.version = 3
+  }
+  return savedGame.version === 3 ? (savedGame as GameState) : null
 }
 
 const distanceBetween = (firstDevice: Device, secondDevice: Device) =>
@@ -458,6 +586,103 @@ function spawnDevice(s: GameState) {
 }
 
 /**
+ * Rolls a single challenge event, mirroring the native `rollChallengeEvent`
+ * weighting. Equipment-failure events only fire in scenarios that enable
+ * equipment failure; the others can occur in any scenario.
+ */
+function rollChallengeEvent(state: GameState, scenario: Scenario) {
+  const roll = Math.random() * 100
+  let kind: 'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure'
+  if (roll < 35) kind = 'trafficSpike'
+  else if (roll < 70) kind = scenario.equipmentFailure ? 'equipmentFailure' : 'budgetBonus'
+  else if (roll < 90) kind = 'budgetBonus'
+  else kind = 'deviceSurge'
+
+  if (kind === 'trafficSpike') {
+    // Weight selection inversely by packet rate so high-demand devices (TV,
+    // tablet) are less likely to be spiked, matching the native bias.
+    const candidates = state.devices.filter(
+      (device) => DEVICE_RULES[device.kind].rate > 0 && !device.offline,
+    )
+    if (!candidates.length) return
+    const minRate = Math.min(...candidates.map((device) => DEVICE_RULES[device.kind].rate))
+    const weights = candidates.map((device) => minRate * 2 + 1 - DEVICE_RULES[device.kind].rate)
+    let pick = Math.floor(
+      Math.random() *
+        Math.max(
+          1,
+          weights.reduce((sum, w) => sum + w, 0),
+        ),
+    )
+    let target = candidates[0]
+    for (let index = 0; index < candidates.length; index++) {
+      pick -= weights[index]
+      if (pick < 0) {
+        target = candidates[index]
+        break
+      }
+    }
+    state.activeEvents.push({
+      id: createId(),
+      kind: 'trafficSpike',
+      ticksRemaining: 10,
+      targetId: target.id,
+    })
+    state.events.unshift(`Traffic spike: ${target.label} doubles demand for 10 ticks.`)
+    return
+  }
+  if (kind === 'budgetBonus') {
+    state.budget += 75
+    state.events.unshift('Budget bonus! +$75')
+    return
+  }
+  if (kind === 'deviceSurge') {
+    spawnDevice(state)
+    spawnDevice(state)
+    state.events.unshift('Device surge! Two new devices joined the network.')
+    return
+  }
+  // equipmentFailure: fail a worn, online infrastructure device outright.
+  const candidates = state.devices.filter(
+    (device) =>
+      ['router', 'switch', 'wireless', 'firewall'].includes(device.kind) && !device.offline,
+  )
+  if (!candidates.length) return
+  const target = candidates[Math.floor(Math.random() * candidates.length)]
+  // Failure probability scales with accumulated wear: fresh gear rarely fails.
+  const failChance = Math.min(90, 15 + target.wear)
+  if (Math.random() * 100 >= failChance) return
+  target.health = 0
+  target.wear += 30
+  target.offline = true
+  state.packets = []
+  state.events.unshift(`${target.label} failed! Repair or replace it.`)
+}
+
+/** Decrements timed events, announces expirations, and drops spent entries. */
+function tickActiveEvents(state: GameState) {
+  for (const event of state.activeEvents) {
+    event.ticksRemaining--
+    if (event.ticksRemaining <= 0 && event.kind === 'trafficSpike') {
+      const target = state.devices.find((device) => device.id === event.targetId)
+      state.events.unshift(`Traffic spike on ${target?.label ?? 'device'} subsided.`)
+    }
+  }
+  state.activeEvents = state.activeEvents.filter((event) => event.ticksRemaining > 0)
+}
+
+/** Awards each delivery-count milestone once, mirroring the native rewards. */
+function checkMilestones(state: GameState) {
+  const milestones = MILESTONES[state.scenario] ?? MILESTONES.home
+  for (const milestone of milestones) {
+    if (state.delivered < milestone.at || state.milestonesReached.includes(milestone.at)) continue
+    state.milestonesReached.push(milestone.at)
+    state.budget += milestone.award
+    state.events.unshift(`Milestone: ${milestone.at} packets delivered! +$${milestone.award}`)
+  }
+}
+
+/**
  * Advances the deterministic game model by one simulation tick.
  *
  * The reducer never mutates the caller's object. Its phases mirror the native
@@ -520,9 +745,14 @@ export function simulate(state: GameState): GameState {
   }
 
   const cloud = nextState.devices.find((device) => device.kind === 'cloud')!
+  const warmup = warmupFactor(nextState.tick, scenarioConfig)
   const sourceDevices = nextState.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0)
   for (const sourceDevice of sourceDevices) {
-    const requestedTraffic = DEVICE_RULES[sourceDevice.kind].rate * nextState.rate
+    const requestedTraffic =
+      DEVICE_RULES[sourceDevice.kind].rate *
+      nextState.rate *
+      warmup *
+      trafficSpikeMultiplier(nextState, sourceDevice.id)
     const packetAttempts =
       Math.floor(requestedTraffic) + (Math.random() < requestedTraffic % 1 ? 1 : 0)
     for (let attempt = 0; attempt < packetAttempts; attempt++) {
@@ -605,6 +835,19 @@ export function simulate(state: GameState): GameState {
     }
   }
 
+  // Warn equipment-failure scenarios 5 ticks before challenge events begin.
+  if (scenarioConfig.equipmentFailure && nextState.tick === scenarioConfig.challengeStart - 5) {
+    nextState.events.unshift('Network stress event imminent — check your infrastructure.')
+  }
+  if (
+    nextState.tick >= scenarioConfig.challengeStart &&
+    (nextState.tick - scenarioConfig.challengeStart) % 90 === 0
+  ) {
+    rollChallengeEvent(nextState, scenarioConfig)
+  }
+  tickActiveEvents(nextState)
+  checkMilestones(nextState)
+
   const shouldEndRun =
     !nextState.unscored &&
     nextState.tick >= scenarioConfig.gameOverCheck &&
@@ -612,7 +855,11 @@ export function simulate(state: GameState): GameState {
     rollingDropTotal > 30
   if (shouldEndRun) {
     nextState.phase = 'gameover'
-    nextState.events.unshift('Network failure threshold exceeded.')
+    const healthBonus = networkHealthBonus(nextState)
+    nextState.score += healthBonus
+    nextState.events.unshift(
+      `Network failure threshold exceeded.${healthBonus ? ` Network health bonus: +${healthBonus}.` : ''}`,
+    )
   }
   nextState.events = nextState.events.slice(0, 6)
   return nextState
