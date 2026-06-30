@@ -118,18 +118,28 @@ describe('NetworkMaster gameplay rules', () => {
   it('bulk-upgrades every copper link to Fast Ethernet via the site upgrade', () => {
     let game = newGame('home')
     game.budget = 10_000
-    expect(game.cables.every((c) => c.tier === 'Copper')).toBe(true)
-    game = upgradeAllCables(game, 'Fast Ethernet')
     const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    game = addCable(game, pc.id, router.id)
+    const cloudCableTierBefore = game.cables.find(
+      (c) => c.from === cloud.id || c.to === cloud.id,
+    )!.tier
+    expect(game.cables.some((c) => c.tier === 'Copper')).toBe(true)
+    game = upgradeAllCables(game, 'Fast Ethernet')
     game.cables.forEach((c) => {
       const touchesCloud = c.from === cloud.id || c.to === cloud.id
-      expect(c.tier).toBe(touchesCloud ? 'Copper' : 'Fast Ethernet') // cloud uplink is excluded
+      // The cloud uplink is excluded from site upgrades; its tier is fixed by the scenario.
+      expect(c.tier).toBe(touchesCloud ? cloudCableTierBefore : 'Fast Ethernet')
     })
   })
 
   it('site cable upgrade reaches beyond Fast Ethernet up to Gigabit', () => {
     let game = newGame('home')
     game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    game = addCable(game, pc.id, router.id)
     game = upgradeAllCables(game, 'Fast Ethernet')
     const fastEthernetSpend = game.cables.find((c) => c.tier === 'Fast Ethernet')!.upgradeSpend
     game = upgradeAllCables(game, 'Gigabit')
