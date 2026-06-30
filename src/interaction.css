@@ -65,6 +65,15 @@
   white-space: nowrap;
 }
 
+.wifi-zone.interfered {
+  border-color: #f3a43b;
+  background: color-mix(in srgb, #f3a43b 7%, transparent);
+}
+
+.wifi-zone.interfered span {
+  color: #f3a43b;
+}
+
 .device.phone > span,
 .device.tablet > span {
   color: #28a9c5;

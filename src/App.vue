@@ -35,16 +35,20 @@ import {
   cycleFirewallRule,
   deleteCable,
   deviceRemovalRefund,
+  hubRange,
   independentPathCount,
   migrateSavedGame,
   moveDevice,
   newGame,
   repairDevice,
   removeDevice,
+  rerouteCable,
   SCENARIOS,
   servingWirelessHub,
   simulate,
-  upgradeAllCopper,
+  siteCableUpgradeFullCost,
+  siteCableUpgradeTargets,
+  upgradeAllCables,
   upgradeAllPorts,
   upgradeAllSwitchSpeed,
   upgradeCable,
@@ -52,6 +56,7 @@ import {
   upgradeDeviceSpeed,
   upgradeWifi,
   wifiInfo,
+  WIRELESS_CAPABLE_KINDS,
 } from './game'
 import type { Device, DeviceKind, GameState } from './types'
 
@@ -93,6 +98,9 @@ const screen = ref<'menu' | 'game'>('menu')
 const game = ref<GameState | null>(loadSavedGame())
 const selected = ref<string | null>(null)
 const cableStart = ref<string | null>(null)
+const cableStyle = ref<'rightAngle' | 'diagonal'>('rightAngle')
+/** Set while rerouting an existing cable's endpoint; cleared once a target device is chosen. */
+const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(null)
 const modal = ref<'help' | 'stats' | 'upgrades' | null>(null)
 const dark = ref(true)
 const chosen = ref('home')
@@ -107,13 +115,24 @@ const cableRoutes = computed(() =>
 const wirelessConnections = computed(() => {
   if (!game.value) return []
   return game.value.devices
-    .filter((device) => ['phone', 'tablet'].includes(device.kind))
+    .filter((device) => WIRELESS_CAPABLE_KINDS.includes(device.kind))
     .map((device) => ({ device, hub: servingWirelessHub(game.value!, device.id) }))
     .filter((connection) => connection.hub !== null)
 })
 
 function wirelessHubLabel(deviceId: string): string | null {
   return game.value ? (servingWirelessHub(game.value, deviceId)?.label ?? null) : null
+}
+/** Coverage circle diameter as a canvas percentage, shrunk while interfered. */
+function wifiZoneDiameter(hub: Device): number {
+  return hubRange(hub) * 2
+}
+
+/** Packets currently waiting in a forwarding device's strict-priority queue. */
+function queueDepth(deviceId: string): number {
+  if (!game.value) return 0
+  return game.value.packets.filter((p) => p.queuedTicks > 0 && p.path[p.hop + 1] === deviceId)
+    .length
 }
 
 let simulationTimer: number | undefined
@@ -172,11 +191,38 @@ function start(scenarioId: string) {
 }
 function selectDevice(device: Device) {
   if (!game.value) return
+  if (reroutingCable.value) {
+    game.value = rerouteCable(
+      game.value,
+      reroutingCable.value.cableId,
+      reroutingCable.value.movingFromEnd,
+      device.id,
+    )
+    selected.value = reroutingCable.value.cableId
+    reroutingCable.value = null
+    return
+  }
   if (cableStart.value && cableStart.value !== device.id) {
-    game.value = addCable(game.value, cableStart.value, device.id)
+    game.value = addCable(game.value, cableStart.value, device.id, cableStyle.value)
     cableStart.value = null
   }
   selected.value = device.id
+}
+/** Starts drawing a new cable from a device, canceling any pending reroute. */
+function beginCable(deviceId: string) {
+  reroutingCable.value = null
+  cableStart.value = deviceId
+}
+/** Begins rerouting one end of the selected cable to a new device on next pick. */
+function startReroute(movingFromEnd: boolean) {
+  if (!pickedCable.value) return
+  cableStart.value = null
+  reroutingCable.value = { cableId: pickedCable.value.id, movingFromEnd }
+}
+/** Closes the inspector and cancels any in-progress cable reroute. */
+function closeInspector() {
+  selected.value = null
+  reroutingCable.value = null
 }
 function setGame(next: GameState) {
   game.value = next
@@ -187,6 +233,7 @@ function deleteSelectedCable() {
   if (!game.value || !pickedCable.value) return
   game.value = deleteCable(game.value, pickedCable.value.id)
   selected.value = null
+  reroutingCable.value = null
 }
 
 /** Removes selected infrastructure and closes its inspector. */
@@ -194,6 +241,7 @@ function removeSelectedDevice() {
   if (!game.value || !picked.value) return
   game.value = removeDevice(game.value, picked.value.id)
   selected.value = null
+  reroutingCable.value = null
 }
 
 const siteDiscountedCost = (fullPrice: number) => Math.floor(fullPrice * 0.85)
@@ -409,14 +457,19 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
             :key="'zone-' + hub.id"
             class="wifi-zone"
+            :class="{ interfered: hub.interference > 0 }"
             :style="{
               left: hub.x + '%',
               top: hub.y + '%',
-              width: wifiInfo(hub)!.range * 2 + '%',
-              height: wifiInfo(hub)!.range * 2 + '%',
+              width: wifiZoneDiameter(hub) + '%',
+              height: wifiZoneDiameter(hub) + '%',
             }"
           >
-            <span>{{ wifiInfo(hub)!.name }}</span>
+            <span>{{
+              hub.interference > 0
+                ? `${wifiInfo(hub)!.name} · INTERFERED (${hub.interference}t)`
+                : wifiInfo(hub)!.name
+            }}</span>
           </div>
           <button
             v-for="d in game.devices"
@@ -432,7 +485,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           >
             <span><component :is="deviceIcons[d.kind]" /></span><b>{{ d.label }}</b
             ><small
-              v-if="['phone', 'tablet'].includes(d.kind)"
+              v-if="WIRELESS_CAPABLE_KINDS.includes(d.kind) && d.ports === 0"
               class="wifi-badge"
               :class="{ 'out-of-range': !wirelessHubLabel(d.id) }"
             >
@@ -457,7 +510,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           </div>
         </div>
         <aside v-if="picked || pickedCable" class="inspector">
-          <button class="close" @click="selected = null"><X /></button
+          <button class="close" @click="closeInspector"><X /></button
           ><template v-if="picked"
             ><p class="overline">DEVICE INSPECTOR</p>
             <div class="inspect-head">
@@ -483,15 +536,12 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               <span>Throughput</span
               ><b>{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick' }}</b>
             </div>
-            <div
-              v-if="['pc', 'tv', 'console', 'phone', 'tablet'].includes(picked.kind)"
-              class="stat"
-            >
+            <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
               <span>Delivered</span><b>{{ picked.delivered }} / {{ picked.generated }}</b>
             </div>
-            <div v-if="['phone', 'tablet'].includes(picked.kind)" class="stat">
+            <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
               <span>Wireless link</span
-              ><b :class="{ 'danger-text': !wirelessHubLabel(picked.id) }">
+              ><b :class="{ 'danger-text': picked.ports === 0 && !wirelessHubLabel(picked.id) }">
                 {{ wirelessHubLabel(picked.id) ?? 'Out of range' }}
               </b>
             </div>
@@ -508,6 +558,21 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             <div v-if="picked.kind === 'wireless'" class="stat">
               <span>Wi-Fi</span
               ><b>{{ wifiInfo(picked)!.name }} · {{ wifiInfo(picked)!.pps }} pkt</b>
+            </div>
+            <div v-if="picked.kind === 'wireless' && picked.interference > 0" class="stat">
+              <span>Status</span
+              ><b class="danger-text"
+                >Interfered — range &amp; speed cut ({{ picked.interference }}t left)</b
+              >
+            </div>
+            <div
+              v-if="['router', 'switch', 'wireless', 'firewall'].includes(picked.kind)"
+              class="stat"
+            >
+              <span>Queue</span
+              ><b :class="{ 'danger-text': queueDepth(picked.id) > 0 }"
+                >{{ queueDepth(picked.id) }} waiting</b
+              >
             </div>
             <div v-if="picked.kind === 'firewall'" class="device-upgrades">
               <button @click="setGame(cycleFirewallRule(game!, picked!.id))">
@@ -536,9 +601,17 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             ><button
               v-if="!['cloud', 'phone', 'tablet'].includes(picked.kind)"
               class="primary wide"
-              @click="cableStart = picked.id"
+              @click="beginCable(picked.id)"
             >
               <CableIcon />{{ cableStart === picked.id ? 'Choose destination…' : 'Begin cable' }}
+            </button>
+            <button
+              v-if="cableStart === picked.id"
+              class="wide"
+              @click="cableStyle = cableStyle === 'rightAngle' ? 'diagonal' : 'rightAngle'"
+            >
+              Style ·
+              <b>{{ cableStyle === 'rightAngle' ? 'Right-angle' : 'Diagonal' }}</b>
             </button>
             <button
               v-if="deviceRemovalRefund(picked) > 0"
@@ -569,6 +642,10 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             <div class="stat">
               <span>Age</span><b>{{ pickedCable.age }} ticks</b>
             </div>
+            <div class="stat">
+              <span>Style</span
+              ><b>{{ pickedCable.style === 'diagonal' ? 'Diagonal' : 'Right-angle' }}</b>
+            </div>
             <button class="wide" @click="setGame(cycleCableVlan(game!, pickedCable!.id))">
               VLAN · {{ pickedCable.vlan ?? 'Untagged' }}
             </button>
@@ -581,6 +658,26 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             >
               <Zap /> Upgrade · ${{
                 CABLE_TIERS[CABLE_TIERS.findIndex((t) => t.name === pickedCable!.tier)].cost
+              }}</button
+            ><button
+              class="wide"
+              :class="{ primary: reroutingCable?.movingFromEnd === true }"
+              @click="startReroute(true)"
+            >
+              <CableIcon />{{
+                reroutingCable?.movingFromEnd === true
+                  ? 'Choose new start…'
+                  : `Reroute start (${game.devices.find((d) => d.id === pickedCable!.from)?.label})`
+              }}</button
+            ><button
+              class="wide"
+              :class="{ primary: reroutingCable?.movingFromEnd === false }"
+              @click="startReroute(false)"
+            >
+              <CableIcon />{{
+                reroutingCable?.movingFromEnd === false
+                  ? 'Choose new end…'
+                  : `Reroute end (${game.devices.find((d) => d.id === pickedCable!.to)?.label})`
               }}</button
             ><button class="wide danger-action" @click="deleteSelectedCable">
               <Trash2 /> Delete · salvage 90%
@@ -645,14 +742,24 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           <h1>Upgrade the whole network.</h1>
           <p>Bulk upgrades cost less per component and apply instantly.</p>
           <div class="upgrade-list">
-            <button @click="setGame(upgradeAllCopper(game!))">
+            <button @click="setGame(upgradeAllCables(game!, 'Fast Ethernet'))">
               <span
                 ><CableIcon /><b>Fast Ethernet rollout</b
-                ><small>Upgrade every copper link</small></span
+                ><small>
+                  {{ siteCableUpgradeTargets(game!, 'Fast Ethernet').length }} link(s) below 100
+                  Mbps</small
+                ></span
               ><strong
-                >${{
-                  siteDiscountedCost(game!.cables.filter((c) => c.tier === 'Copper').length * 50)
-                }}</strong
+                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, 'Fast Ethernet')) }}</strong
+              ></button
+            ><button @click="setGame(upgradeAllCables(game!, 'Gigabit'))">
+              <span
+                ><CableIcon /><b>Gigabit rollout</b
+                ><small>
+                  {{ siteCableUpgradeTargets(game!, 'Gigabit').length }} link(s) below 1 Gbps</small
+                ></span
+              ><strong
+                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, 'Gigabit')) }}</strong
               ></button
             ><button @click="setGame(upgradeAllPorts(game!))">
               <span

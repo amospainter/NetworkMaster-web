@@ -52,13 +52,13 @@ Coordinates are stored as percentages so one topology works across iPad and desk
 
 - Active run key: `networkmaster.active-run.v1`
 - High score key: `networkmaster.best.v1`
-- Current `GameState.version`: `3`
+- Current `GameState.version`: `6`
 
-Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3; `App.vue`'s loader delegates to it.
+Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, and version 5 runs (which predate `Cable.style`) to version 6; `App.vue`'s loader delegates to it.
 
 ## Gameplay invariants
 
-- Phones and tablets are Wi-Fi only and cannot receive cables.
+- Phones and tablets are Wi-Fi only and cannot receive cables. PC/TV/console keep wired ports but are also `WIRELESS_CAPABLE_KINDS`, so they can additionally join an access point's coverage — including simultaneously while cabled, for redundancy.
 - End devices cannot connect directly to other end devices.
 - Only routers may connect to the Cloud Edge.
 - Duplicate cables and links exceeding port limits are rejected.
@@ -71,6 +71,12 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - Challenge events roll every 90 ticks from a scenario's `challengeStart` (native roster: traffic spike, budget bonus, device surge, and — only when `equipmentFailure` is set — equipment failure). A traffic spike doubles one source's demand for 10 ticks via `activeEvents`.
 - Delivery-count milestones (`MILESTONES`) each pay a one-time budget award, recorded in `milestonesReached`.
 - Game over adds a `networkHealthBonus` to the score: surviving-source ratio times lifetime delivery ratio, scaled to 1000.
+- Wireless access points (`kind: 'wireless'`) occasionally suffer interference (`Device.interference`, ticks remaining), cutting their effective range to 60% and throughput to 50% via `hubRange`/`hubPps`; chance per tick is higher while a hub is actively serving a wireless-capable client.
+- In non-`home` scenarios, ~30% of generated source traffic targets another device on a different subnet (via the router) instead of the Cloud Edge.
+- Forwarding devices (router/switch/wireless/firewall) admit only as many packets per tick as their effective PPS, in strict priority order (realtime > stream > bulk, ties keep arrival order). Overflow waits as a real packet in `Packet.queuedTicks` at that device — not a counter — and is dropped only after `QUEUE_CAPACITY_TICKS` (6) ticks unadmitted.
+- Cables carry a `style` of `'rightAngle'` (routed by `computeCableRoutes`'s obstacle-avoiding lane planner) or `'diagonal'` (drawn as a direct line between endpoints, skipping the orthogonal scoring and occupancy tracking entirely).
+- `rerouteCable` moves one end of an existing cable to a new device, re-running the same validation as `addCable` (no end-device-to-end-device links, no wireless-only endpoints, Cloud Edge only via router, no duplicate links, target port limit) while preserving the cable's tier, VLAN, style, and upgrade spend.
+- A wireless-capable client connects to the least-loaded in-range access point (`wirelessClientLoad`, a count of `WIRELESS_CAPABLE_KINDS` devices in that hub's coverage circle), breaking ties by nearest distance — not simply the nearest hub.
 
 ## Code standards
 

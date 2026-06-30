@@ -1,5 +1,6 @@
 import type {
   Cable,
+  CableStyle,
   CableTier,
   Device,
   DeviceKind,
@@ -154,6 +155,22 @@ const WIFI_STANDARDS = [
   { range: 40, pps: 60, cost: 999, name: 'Wi-Fi 7' },
 ]
 const SOURCE_SPAWN_ORDER: DeviceKind[] = ['pc', 'phone', 'console', 'tablet', 'tv']
+/** Matches the native `wifiInterferenceRangeFactor`/`wifiInterferenceThroughputFactor`. */
+const WIFI_INTERFERENCE_RANGE_FACTOR = 0.6
+const WIFI_INTERFERENCE_PPS_FACTOR = 0.5
+/** Higher weight forwards first under strict-priority admission. */
+const PRIORITY_WEIGHT: Record<Priority, number> = { realtime: 2, stream: 1, bulk: 0 }
+/** A packet held at a forwarding device's queue longer than this is dropped. */
+const QUEUE_CAPACITY_TICKS = 6
+const FORWARDING_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
+/**
+ * End-user devices that can join an access point's coverage. Phones and
+ * tablets have no wired ports and are Wi-Fi only; pc/tv/console additionally
+ * keep their wired ports, so a cable and Wi-Fi coverage both count as valid
+ * connectivity for them.
+ */
+export const WIRELESS_CAPABLE_KINDS: DeviceKind[] = ['pc', 'tv', 'console', 'phone', 'tablet']
+const WIRELESS_ONLY_KINDS: DeviceKind[] = ['phone', 'tablet']
 
 /** Creates a UUID in modern browsers and a standards-shaped fallback elsewhere. */
 const createId = () => {
@@ -212,6 +229,7 @@ const createDevice = (
   firewallRule: null,
   generated: 0,
   delivered: 0,
+  interference: 0,
 })
 /** Creates an unloaded, operational cable between two devices. */
 const createCable = (
@@ -219,6 +237,7 @@ const createCable = (
   secondDevice: Device,
   tier: CableTier = 'Copper',
   vlan: number | null = null,
+  style: CableStyle = 'rightAngle',
 ): Cable => {
   const tierRules = CABLE_TIERS.find((candidate) => candidate.name === tier)!
   return {
@@ -233,6 +252,7 @@ const createCable = (
     vlan,
     upgradeSpend: 0,
     failedTicks: 0,
+    style,
   }
 }
 const connectDevices = (
@@ -328,7 +348,7 @@ export function newGame(scenario = 'home'): GameState {
       ).length),
   )
   return {
-    version: 3,
+    version: 6,
     phase: 'playing',
     scenario: scenarioConfig.id,
     tick: 0,
@@ -438,8 +458,10 @@ export function networkHealthBonus(state: GameState): number {
 
 /**
  * Upgrades a persisted save to the current schema, or returns null if it is too
- * old to migrate safely. Version 2 runs predate challenge events and milestones,
- * so those fields are backfilled; older or malformed saves are discarded.
+ * old to migrate safely. Version 2 runs predate challenge events and milestones;
+ * version 3 runs predate Wi-Fi interference; version 4 runs predate per-packet
+ * queue admission; version 5 runs predate cable styles. Older or malformed
+ * saves are discarded.
  */
 export function migrateSavedGame(
   savedGame: { version: number } & Partial<Omit<GameState, 'version'>>,
@@ -453,31 +475,73 @@ export function migrateSavedGame(
     savedGame.activeEvents ??= []
     savedGame.version = 3
   }
-  return savedGame.version === 3 ? (savedGame as GameState) : null
+  if (savedGame.version === 3) {
+    savedGame.devices?.forEach((device) => {
+      device.interference ??= 0
+    })
+    savedGame.version = 4
+  }
+  if (savedGame.version === 4) {
+    // In-flight packets predate the queued-admission model; dropping them
+    // loses no persisted progress since they are transient simulation state.
+    savedGame.packets = []
+    savedGame.version = 5
+  }
+  if (savedGame.version === 5) {
+    savedGame.cables?.forEach((cable) => {
+      cable.style ??= 'rightAngle'
+    })
+    savedGame.version = 6
+  }
+  return savedGame.version === 6 ? (savedGame as GameState) : null
 }
 
 const distanceBetween = (firstDevice: Device, secondDevice: Device) =>
   Math.hypot(firstDevice.x - secondDevice.x, firstDevice.y - secondDevice.y)
 
-/** Returns the nearest operational access point covering a wireless-only client. */
+/** Effective Wi-Fi range for a hub, shrunk while it suffers interference. */
+export const hubRange = (hub: Device) =>
+  WIFI_STANDARDS[Math.max(0, hub.wifiLevel)].range *
+  (hub.interference > 0 ? WIFI_INTERFERENCE_RANGE_FACTOR : 1)
+
+/** Effective Wi-Fi throughput for a hub, halved while it suffers interference. */
+const hubPps = (hub: Device) =>
+  Math.max(1, Math.floor(hub.pps * (hub.interference > 0 ? WIFI_INTERFERENCE_PPS_FACTOR : 1)))
+
+/** Counts the wireless-capable clients currently inside a hub's coverage circle. */
+const wirelessClientLoad = (state: GameState, hub: Device) =>
+  state.devices.filter(
+    (candidate) =>
+      WIRELESS_CAPABLE_KINDS.includes(candidate.kind) &&
+      !candidate.offline &&
+      candidate.id !== hub.id &&
+      distanceBetween(candidate, hub) <= hubRange(hub),
+  ).length
+
+/**
+ * Returns the operational access point covering a wireless-capable client,
+ * preferring the least-loaded hub among those in range so clients spread out
+ * across access points instead of piling onto a single one; nearest distance
+ * breaks ties between equally loaded hubs.
+ */
 const findWirelessHub = (state: GameState, wirelessDevice: Device) =>
   state.devices
     .filter(
       (candidate) =>
         candidate.kind === 'wireless' &&
         !candidate.offline &&
-        distanceBetween(candidate, wirelessDevice) <=
-          WIFI_STANDARDS[Math.max(0, candidate.wifiLevel)].range,
+        distanceBetween(candidate, wirelessDevice) <= hubRange(candidate),
     )
-    .sort(
-      (firstHub, secondHub) =>
-        distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice),
-    )[0]
+    .sort((firstHub, secondHub) => {
+      const loadDelta = wirelessClientLoad(state, firstHub) - wirelessClientLoad(state, secondHub)
+      if (loadDelta !== 0) return loadDelta
+      return distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice)
+    })[0]
 
-/** Returns the access point currently serving a wireless-only device, if any. */
+/** Returns the access point currently serving a wireless-capable device, if any. */
 export function servingWirelessHub(state: GameState, deviceId: string): Device | null {
   const wirelessDevice = state.devices.find((device) => device.id === deviceId)
-  if (!wirelessDevice || !['phone', 'tablet'].includes(wirelessDevice.kind)) return null
+  if (!wirelessDevice || !WIRELESS_CAPABLE_KINDS.includes(wirelessDevice.kind)) return null
   return findWirelessHub(state, wirelessDevice) ?? null
 }
 
@@ -515,8 +579,8 @@ export function findRoute(
         addEdge(networkCable.from, networkCable.to)
       }
     }
-  const wirelessDevices = state.devices.filter(
-    (device) => device.kind === 'phone' || device.kind === 'tablet',
+  const wirelessDevices = state.devices.filter((device) =>
+    WIRELESS_CAPABLE_KINDS.includes(device.kind),
   )
   for (const wirelessDevice of wirelessDevices) {
     const accessPoint = findWirelessHub(state, wirelessDevice)
@@ -553,6 +617,31 @@ export function independentPathCount(state: GameState, sourceId: string, destina
   return findRoute(stateWithoutPrimaryRoute, sourceId, destinationId) ? 2 : 1
 }
 
+/** Returns a random operational device in a different subnet to receive cross-subnet traffic. */
+function pickCrossSubnetDest(state: GameState, source: Device): Device | undefined {
+  const candidates = state.devices.filter(
+    (device) =>
+      device.subnet !== source.subnet &&
+      (device.kind === 'server' || DEVICE_RULES[device.kind].rate > 0) &&
+      !device.offline &&
+      device.id !== source.id,
+  )
+  return candidates[Math.floor(Math.random() * candidates.length)]
+}
+
+/** Finds a route from `sourceId` to `destinationId` that must pass through `viaId`. */
+function findRouteThrough(
+  state: GameState,
+  sourceId: string,
+  viaId: string,
+  destinationId: string,
+): string[] | null {
+  const toVia = findRoute(state, sourceId, viaId)
+  const fromVia = findRoute(state, viaId, destinationId)
+  if (!toVia || !fromVia) return null
+  return [...toVia, ...fromVia.slice(1)]
+}
+
 /** Creates an in-flight packet at the beginning of a resolved route. */
 function packet(source: Device, path: string[], tick: number): Packet {
   return {
@@ -563,6 +652,7 @@ function packet(source: Device, path: string[], tick: number): Packet {
     priority: DEVICE_RULES[source.kind].priority,
     source: source.id,
     generatedTick: tick,
+    queuedTicks: 0,
   }
 }
 /** Adds the next end-user device in the native spawn rotation. */
@@ -581,7 +671,7 @@ function spawnDevice(s: GameState) {
   s.devices.push(d)
   s.spawned++
   s.events.unshift(
-    `${d.label} joined — ${kind === 'phone' || kind === 'tablet' ? 'move it into Wi-Fi coverage' : 'draw a cable to connect it'}.`,
+    `${d.label} joined — ${WIRELESS_ONLY_KINDS.includes(kind) ? 'move it into Wi-Fi coverage' : 'draw a cable, or move it into Wi-Fi coverage'}.`,
   )
 }
 
@@ -671,6 +761,37 @@ function tickActiveEvents(state: GameState) {
   state.activeEvents = state.activeEvents.filter((event) => event.ticksRemaining > 0)
 }
 
+/**
+ * Random Wi-Fi interference: active access points occasionally lose range and
+ * throughput for a stretch of ticks, making wireless less dependable than a
+ * wired link. Mirrors the native `tickWirelessInterference`.
+ */
+function tickWirelessInterference(state: GameState) {
+  for (const device of state.devices) {
+    if (device.kind !== 'wireless') continue
+    if (device.interference > 0) {
+      device.interference--
+      if (device.interference === 0) {
+        state.events.unshift(`${device.label} interference cleared.`)
+      }
+      continue
+    }
+    if (device.offline) continue
+    // Hubs actually serving clients are more exposed to interference.
+    const serving = state.devices.some(
+      (candidate) =>
+        WIRELESS_CAPABLE_KINDS.includes(candidate.kind) &&
+        !candidate.offline &&
+        distanceBetween(candidate, device) <= hubRange(device),
+    )
+    const chancePerTick = serving ? 0.007 : 0.002
+    if (Math.random() < chancePerTick) {
+      device.interference = 8 + Math.floor(Math.random() * 11) // 8-18 ticks
+      state.events.unshift(`${device.label} hit by Wi-Fi interference — range & speed cut.`)
+    }
+  }
+}
+
 /** Awards each delivery-count milestone once, mirroring the native rewards. */
 function checkMilestones(state: GameState) {
   const milestones = MILESTONES[state.scenario] ?? MILESTONES.home
@@ -707,13 +828,61 @@ export function simulate(state: GameState): GameState {
   })
 
   let packetsDroppedThisTick = 0
+  // Packets that finish traversing their current cable this tick try to arrive
+  // at path[hop + 1]. Forwarding devices (router/switch/wireless/firewall)
+  // admit only as many as their PPS allows, in strict priority order
+  // (realtime > stream > bulk); the rest wait in a real per-device queue
+  // instead of vanishing, and are dropped only after `QUEUE_CAPACITY_TICKS`.
+  const arrivingByDevice = new Map<string, Packet[]>()
+  const steadyPackets: Packet[] = []
   for (const activePacket of nextState.packets) {
-    activePacket.progress += 0.5
-    if (activePacket.progress >= 1) {
-      activePacket.progress = 0
-      activePacket.hop++
+    if (activePacket.progress + 0.5 < 1) {
+      activePacket.progress += 0.5
+      steadyPackets.push(activePacket)
+      continue
+    }
+    const arrivingDeviceId = activePacket.path[activePacket.hop + 1]
+    const arrivals = arrivingByDevice.get(arrivingDeviceId) ?? []
+    arrivals.push(activePacket)
+    arrivingByDevice.set(arrivingDeviceId, arrivals)
+  }
+
+  const admittedPackets: Packet[] = []
+  const requeuedPackets: Packet[] = []
+  for (const [arrivingDeviceId, arrivals] of arrivingByDevice) {
+    const arrivingDevice = nextState.devices.find((device) => device.id === arrivingDeviceId)
+    if (!arrivingDevice || !FORWARDING_KINDS.includes(arrivingDevice.kind)) {
+      admittedPackets.push(...arrivals)
+      continue
+    }
+    const capacity =
+      arrivingDevice.kind === 'wireless' ? hubPps(arrivingDevice) : arrivingDevice.pps
+    const ordered = [...arrivals].sort(
+      (a, b) => PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority],
+    )
+    admittedPackets.push(...ordered.slice(0, capacity))
+    const overflow = ordered.slice(capacity)
+    for (const overflowPacket of overflow) {
+      overflowPacket.queuedTicks++
+      if (overflowPacket.queuedTicks > QUEUE_CAPACITY_TICKS) packetsDroppedThisTick++
+      else requeuedPackets.push(overflowPacket)
+    }
+    if (overflow.length > 0) {
+      arrivingDevice.wear++
+      if (scenarioConfig.equipmentFailure && arrivingDevice.wear > 20) {
+        const healthLoss = Math.max(1, Math.floor(arrivingDevice.wear / 25))
+        arrivingDevice.health = Math.max(0, arrivingDevice.health - healthLoss)
+        arrivingDevice.offline = arrivingDevice.health === 0
+      }
     }
   }
+  for (const admittedPacket of admittedPackets) {
+    admittedPacket.progress = 0
+    admittedPacket.hop++
+  }
+  // Requeued packets keep their pre-arrival progress so they retry admission
+  // next tick instead of restarting their cable traversal from the source.
+  nextState.packets = [...steadyPackets, ...admittedPackets, ...requeuedPackets]
 
   const deliveredPackets = nextState.packets.filter(
     (activePacket) => activePacket.hop >= activePacket.path.length - 1,
@@ -745,6 +914,7 @@ export function simulate(state: GameState): GameState {
   }
 
   const cloud = nextState.devices.find((device) => device.kind === 'cloud')!
+  const router = nextState.devices.find((device) => device.kind === 'router')!
   const warmup = warmupFactor(nextState.tick, scenarioConfig)
   const sourceDevices = nextState.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0)
   for (const sourceDevice of sourceDevices) {
@@ -758,7 +928,16 @@ export function simulate(state: GameState): GameState {
     for (let attempt = 0; attempt < packetAttempts; attempt++) {
       if (Math.random() > 0.24) continue
       sourceDevice.generated++
-      const route = findRoute(nextState, sourceDevice.id, cloud.id)
+      let route = findRoute(nextState, sourceDevice.id, cloud.id)
+      // 30% of traffic in multi-subnet scenarios targets another device on the
+      // network (e.g. desk-to-server) instead of the cloud, routed via the router.
+      if (scenarioConfig.id !== 'home' && Math.random() < 0.3) {
+        const crossDest = pickCrossSubnetDest(nextState, sourceDevice)
+        if (crossDest) {
+          const crossRoute = findRouteThrough(nextState, sourceDevice.id, router.id, crossDest.id)
+          if (crossRoute) route = crossRoute
+        }
+      }
       if (route) nextState.packets.push(packet(sourceDevice, route, nextState.tick))
       else packetsDroppedThisTick++
     }
@@ -769,28 +948,6 @@ export function simulate(state: GameState): GameState {
     networkCable.status = networkCable.load > networkCable.capacity ? 'congested' : 'active'
     if (networkCable.status === 'congested') {
       packetsDroppedThisTick += Math.max(0, networkCable.load - networkCable.capacity)
-    }
-  }
-
-  const infrastructure = nextState.devices.filter((device) =>
-    ['router', 'switch', 'wireless', 'firewall'].includes(device.kind),
-  )
-  for (const infrastructureDevice of infrastructure) {
-    const throughputUsed = nextState.cables
-      .filter(
-        (networkCable) =>
-          networkCable.from === infrastructureDevice.id ||
-          networkCable.to === infrastructureDevice.id,
-      )
-      .reduce((total, networkCable) => total + networkCable.load, 0)
-    if (throughputUsed > infrastructureDevice.pps) {
-      packetsDroppedThisTick += throughputUsed - infrastructureDevice.pps
-      infrastructureDevice.wear++
-      if (scenarioConfig.equipmentFailure && infrastructureDevice.wear > 20) {
-        const healthLoss = Math.max(1, Math.floor(infrastructureDevice.wear / 25))
-        infrastructureDevice.health = Math.max(0, infrastructureDevice.health - healthLoss)
-        infrastructureDevice.offline = infrastructureDevice.health === 0
-      }
     }
   }
 
@@ -847,6 +1004,7 @@ export function simulate(state: GameState): GameState {
   }
   tickActiveEvents(nextState)
   checkMilestones(nextState)
+  tickWirelessInterference(nextState)
 
   const shouldEndRun =
     !nextState.unscored &&
@@ -866,12 +1024,17 @@ export function simulate(state: GameState): GameState {
 }
 
 /** Validates topology rules and adds a new copper connection. */
-export function addCable(state: GameState, from: string, to: string): GameState {
+export function addCable(
+  state: GameState,
+  from: string,
+  to: string,
+  style: CableStyle = 'rightAngle',
+): GameState {
   const s = cloneState(state),
     a = s.devices.find((d) => d.id === from),
     b = s.devices.find((d) => d.id === to)
   if (!a || !b || from === to) return state
-  if ([a, b].some((d) => d.kind === 'phone' || d.kind === 'tablet'))
+  if ([a, b].some((d) => WIRELESS_ONLY_KINDS.includes(d.kind)))
     return {
       ...state,
       events: ['Phones and tablets connect through Wi-Fi coverage only.', ...state.events].slice(
@@ -897,11 +1060,84 @@ export function addCable(state: GameState, from: string, to: string): GameState 
       ...state,
       events: ['Only a router may connect to the Cloud Edge.', ...state.events].slice(0, 6),
     }
-  s.cables.push(createCable(a, b))
+  s.cables.push(createCable(a, b, 'Copper', null, style))
   a.ports++
   b.ports++
   s.packets = []
   s.events.unshift(`${a.label} linked to ${b.label}.`)
+  return s
+}
+
+/**
+ * Moves one end of an existing cable to a new device, preserving its tier,
+ * VLAN, style, and upgrade investment. Validation mirrors `addCable` while
+ * keeping the fixed end untouched. Mirrors the native `rerouteCable`.
+ */
+export function rerouteCable(
+  state: GameState,
+  cableId: string,
+  movingFromEnd: boolean,
+  newDeviceId: string,
+): GameState {
+  const s = cloneState(state),
+    cable = s.cables.find((c) => c.id === cableId)
+  if (!cable) return state
+  const fixedId = movingFromEnd ? cable.to : cable.from
+  const movingId = movingFromEnd ? cable.from : cable.to
+  if (newDeviceId === fixedId || newDeviceId === movingId) return state
+  const fixed = s.devices.find((d) => d.id === fixedId),
+    target = s.devices.find((d) => d.id === newDeviceId),
+    moving = s.devices.find((d) => d.id === movingId)
+  if (!fixed || !target || !moving) return state
+  const end = (d: Device) => ['pc', 'tv', 'console', 'server'].includes(d.kind)
+  if (end(fixed) && end(target))
+    return {
+      ...state,
+      events: ['End devices need network equipment between them.', ...state.events].slice(0, 6),
+    }
+  if ([fixed, target].some((d) => WIRELESS_ONLY_KINDS.includes(d.kind)))
+    return {
+      ...state,
+      events: ['Phones and tablets connect through Wi-Fi coverage only.', ...state.events].slice(
+        0,
+        6,
+      ),
+    }
+  if (
+    (fixed.kind === 'cloud' || target.kind === 'cloud') &&
+    fixed.kind !== 'router' &&
+    target.kind !== 'router'
+  )
+    return {
+      ...state,
+      events: ['Only a router may connect to the Cloud Edge.', ...state.events].slice(0, 6),
+    }
+  if (
+    s.cables.some(
+      (c) =>
+        c.id !== cableId &&
+        ((c.from === fixedId && c.to === newDeviceId) ||
+          (c.from === newDeviceId && c.to === fixedId)),
+    )
+  )
+    return {
+      ...state,
+      events: ['That connection already exists.', ...state.events].slice(0, 6),
+    }
+  if (target.ports >= target.maxPorts)
+    return {
+      ...state,
+      events: [`${target.label} has no free ports for this connection.`, ...state.events].slice(
+        0,
+        6,
+      ),
+    }
+  moving.ports--
+  target.ports++
+  if (movingFromEnd) cable.from = newDeviceId
+  else cable.to = newDeviceId
+  s.packets = []
+  s.events.unshift(`Rerouted connection to ${target.label}.`)
   return s
 }
 const costs: Partial<Record<DeviceKind, number>> = {
@@ -1091,41 +1327,63 @@ export function removeDevice(state: GameState, deviceId: string): GameState {
   nextState.events.unshift(`Removed ${device.label} (+$${equipmentRefund + cableRefund} salvage).`)
   return nextState
 }
-/** Applies the discounted Fast Ethernet upgrade to every remaining copper link. */
-export function upgradeAllCopper(state: GameState): GameState {
+/** True when a cable is the fixed-tier ISP uplink, excluded from site bulk-upgrades. */
+const isCloudCable = (state: GameState, cable: Cable) => {
   const cloudId = state.devices.find((device) => device.kind === 'cloud')?.id
-  const targets = state.cables.filter(
-    (networkCable) =>
-      networkCable.tier === 'Copper' &&
-      networkCable.from !== cloudId &&
-      networkCable.to !== cloudId,
+  return cable.from === cloudId || cable.to === cloudId
+}
+
+/** Cables (excluding the cloud uplink) below the given tier, eligible for a site upgrade. */
+export function siteCableUpgradeTargets(state: GameState, target: CableTier): Cable[] {
+  const targetIndex = CABLE_TIERS.findIndex((tier) => tier.name === target)
+  return state.cables.filter(
+    (cable) =>
+      CABLE_TIERS.findIndex((tier) => tier.name === cable.tier) < targetIndex &&
+      !isCloudCable(state, cable),
   )
-  const cost = discountedSiteCost(targets.length * 50)
+}
+
+/** Undiscounted price to bring every eligible cable up to `target`, every intervening tier included. */
+export function siteCableUpgradeFullCost(state: GameState, target: CableTier): number {
+  const targetIndex = CABLE_TIERS.findIndex((tier) => tier.name === target)
+  return siteCableUpgradeTargets(state, target).reduce((total, cable) => {
+    const fromIndex = CABLE_TIERS.findIndex((tier) => tier.name === cable.tier)
+    const intervening = CABLE_TIERS.slice(fromIndex, targetIndex)
+    return total + intervening.reduce((sum, tier) => sum + tier.cost, 0)
+  }, 0)
+}
+
+/**
+ * Applies a discounted bulk upgrade to every cable below `target`, paying for
+ * every intervening tier per cable. Mirrors the native `upgradeAllCables`,
+ * which exposes a 100 Mbps / 1 Gbps target picker; the cloud uplink is
+ * excluded since its tier is fixed by the scenario.
+ */
+export function upgradeAllCables(state: GameState, target: CableTier): GameState {
+  const targets = siteCableUpgradeTargets(state, target)
+  const cost = discountedSiteCost(siteCableUpgradeFullCost(state, target))
+  const targetTier = CABLE_TIERS.find((tier) => tier.name === target)!
   if (!targets.length || state.budget < cost)
     return {
       ...state,
       events: [
         targets.length
           ? 'Insufficient budget for site cable upgrade.'
-          : 'All copper links are upgraded.',
+          : `All connections already meet the ${target} standard.`,
         ...state.events,
       ].slice(0, 6),
     }
   const s = cloneState(state)
+  const targetIds = new Set(targets.map((cable) => cable.id))
   s.cables
-    .filter(
-      (networkCable) =>
-        networkCable.tier === 'Copper' &&
-        networkCable.from !== cloudId &&
-        networkCable.to !== cloudId,
-    )
+    .filter((cable) => targetIds.has(cable.id))
     .forEach((c) => {
-      c.tier = 'Fast Ethernet'
-      c.capacity = 5
+      c.tier = targetTier.name
+      c.capacity = targetTier.capacity
       c.upgradeSpend += Math.floor(cost / targets.length)
     })
   s.budget -= cost
-  s.events.unshift(`Site upgrade: ${targets.length} links moved to Fast Ethernet.`)
+  s.events.unshift(`Site upgrade: ${targets.length} links moved to ${target}.`)
   return s
 }
 /** Applies the discounted two-port expansion to every router and switch. */

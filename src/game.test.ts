@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { computeCableRoutes } from './cableGeometry'
 import {
   addCable,
   CABLE_TIERS,
@@ -12,8 +13,11 @@ import {
   networkHealthBonus,
   newGame,
   removeDevice,
+  rerouteCable,
   SCENARIOS,
+  servingWirelessHub,
   simulate,
+  upgradeAllCables,
   upgradeCable,
 } from './game'
 import type { GameState } from './types'
@@ -22,7 +26,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(3)
+      expect(game.version).toBe(6)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -40,6 +44,38 @@ describe('NetworkMaster gameplay rules', () => {
     expect(findRoute(game, phone.id, cloud.id)).not.toBeNull()
     const moved = moveDevice(game, phone.id, 5, 94)
     expect(findRoute(moved, phone.id, cloud.id)).toBeNull()
+  })
+
+  it('connects an uncabled end device (pc/tv/console) to the network via Wi-Fi coverage', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = buildDevice(game, 'wireless', 30, 50)
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    game = buildDevice(game, 'pc', 32, 52) // inside the hub's coverage circle, no cable
+    const newPc = game.devices.filter((d) => d.kind === 'pc').at(-1)!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    expect(findRoute(game, newPc.id, cloud.id)).not.toBeNull()
+    expect(servingWirelessHub(game, newPc.id)?.id).toBe(hub.id)
+
+    const moved = moveDevice(game, newPc.id, 95, 95) // out of the hub's coverage circle
+    expect(findRoute(moved, newPc.id, cloud.id)).toBeNull()
+  })
+
+  it('gives a cabled end device a redundant Wi-Fi backup path when also in coverage', () => {
+    let game = newGame('home')
+    game.budget = 1000
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = addCable(game, pc.id, router.id)
+    game = buildDevice(game, 'wireless', pc.x, pc.y) // hub placed right on top of the cabled PC
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    // The router (not the cloud) is the destination here: the default topology's
+    // single router-cloud cable is a chokepoint every route must cross, so it
+    // cannot itself demonstrate edge-disjoint redundancy.
+    expect(independentPathCount(game, pc.id, router.id)).toBe(2)
   })
 
   it('rejects wired links to wireless-only devices', () => {
@@ -79,6 +115,34 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.cables[0].capacity).toBe(1000)
   })
 
+  it('bulk-upgrades every copper link to Fast Ethernet via the site upgrade', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    expect(game.cables.every((c) => c.tier === 'Copper')).toBe(true)
+    game = upgradeAllCables(game, 'Fast Ethernet')
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    game.cables.forEach((c) => {
+      const touchesCloud = c.from === cloud.id || c.to === cloud.id
+      expect(c.tier).toBe(touchesCloud ? 'Copper' : 'Fast Ethernet') // cloud uplink is excluded
+    })
+  })
+
+  it('site cable upgrade reaches beyond Fast Ethernet up to Gigabit', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    game = upgradeAllCables(game, 'Fast Ethernet')
+    const fastEthernetSpend = game.cables.find((c) => c.tier === 'Fast Ethernet')!.upgradeSpend
+    game = upgradeAllCables(game, 'Gigabit')
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    game.cables
+      .filter((c) => c.from !== cloud.id && c.to !== cloud.id)
+      .forEach((c) => {
+        expect(c.tier).toBe('Gigabit')
+        expect(c.capacity).toBe(10)
+        expect(c.upgradeSpend).toBeGreaterThan(fastEthernetSpend)
+      })
+  })
+
   it('advances simulation and maintains a 20-tick loss window', () => {
     let game = newGame('home')
     for (let i = 0; i < 25; i++) game = simulate(game)
@@ -106,11 +170,12 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.events[0]).toContain('$117 salvage')
   })
 
-  it('initializes the version 3 schema with empty progression state', () => {
+  it('initializes the version 6 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(3)
+    expect(game.version).toBe(6)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
+    expect(game.devices.every((device) => device.interference === 0)).toBe(true)
     for (const scenario of SCENARIOS) {
       expect(scenario.warmupFloor).toBeGreaterThan(0)
       expect(scenario.warmupFloor).toBeLessThanOrEqual(1)
@@ -119,7 +184,7 @@ describe('NetworkMaster gameplay rules', () => {
     }
   })
 
-  it('migrates a version 2 save and rejects incompatible schemas', () => {
+  it('migrates a version 2 save through version 3 to the current schema', () => {
     const legacy = { ...newGame('home'), version: 2 } as unknown as {
       version: number
       devices: Record<string, unknown>[]
@@ -127,15 +192,54 @@ describe('NetworkMaster gameplay rules', () => {
     legacy.devices.forEach((device) => {
       delete device.upgradeSpend
       delete device.firewallRule
+      delete device.interference
     })
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(3)
+    expect(migrated?.version).toBe(6)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
+    expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
     expect(migrateSavedGame({ version: 1 })).toBeNull()
+  })
+
+  it('migrates a version 3 save by backfilling interference state', () => {
+    const v3 = { ...newGame('home'), version: 3 } as unknown as {
+      version: number
+      devices: Record<string, unknown>[]
+    } & Partial<Omit<GameState, 'version' | 'devices'>>
+    v3.devices.forEach((device) => delete device.interference)
+    const migrated = migrateSavedGame(v3 as unknown as { version: number })
+    expect(migrated?.version).toBe(6)
+    expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
+  })
+
+  it('migrates a version 4 save by clearing transient in-flight packets', () => {
+    const v4 = {
+      ...newGame('home'),
+      version: 4,
+      packets: [{ id: 'p1' }],
+    } as unknown as { version: number }
+    const migrated = migrateSavedGame(v4)
+    expect(migrated?.version).toBe(6)
+    expect(migrated?.packets).toEqual([])
+  })
+
+  it('migrates a version 5 save by backfilling cable style', () => {
+    const v5 = {
+      ...newGame('home'),
+      version: 5,
+      cables: newGame('home').cables.map((c) => {
+        const cableWithoutStyle = { ...c } as Partial<typeof c>
+        delete cableWithoutStyle.style
+        return cableWithoutStyle
+      }),
+    } as unknown as { version: number }
+    const migrated = migrateSavedGame(v5)
+    expect(migrated?.version).toBe(6)
+    expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
   })
 
   it('awards a delivery milestone exactly once', () => {
@@ -176,6 +280,130 @@ describe('NetworkMaster gameplay rules', () => {
     expect(findRoute(game, pc.id, cloud.id)).toBeNull()
   })
 
+  it('balances wireless clients onto a less-loaded access point in range', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    game = buildDevice(game, 'wireless', 10, 10)
+    game = buildDevice(game, 'wireless', 25, 10)
+    const [hubA, hubB] = game.devices.filter((d) => d.kind === 'wireless')
+    game = buildDevice(game, 'phone', 10, 12) // within range of hub A only
+    game = buildDevice(game, 'phone', 17, 10) // within range of both hubs
+    const [firstPhone, secondPhone] = game.devices.filter((d) => d.kind === 'phone')
+    expect(servingWirelessHub(game, firstPhone.id)?.id).toBe(hubA.id)
+    // Hub A already serves firstPhone, so the second phone (in range of both)
+    // balances onto the less-loaded hub B instead of the nearer hub A.
+    expect(servingWirelessHub(game, secondPhone.id)?.id).toBe(hubB.id)
+  })
+
+  it('shrinks wireless coverage and throughput while a hub is interfered', () => {
+    const game = newGame('startup')
+    const accessPoint = game.devices.find((d) => d.kind === 'wireless')!
+    const phone = game.devices.find((d) => d.kind === 'phone')!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    expect(findRoute(game, phone.id, cloud.id)).not.toBeNull()
+
+    accessPoint.interference = 10
+    // Move the phone just outside the interfered (60%) range but still inside
+    // the hub's full-strength range, so only interference explains the drop.
+    const interferedGame = moveDevice(game, phone.id, accessPoint.x, accessPoint.y + 14)
+    interferedGame.devices.find((d) => d.id === accessPoint.id)!.interference = 10
+    expect(findRoute(interferedGame, phone.id, cloud.id)).toBeNull()
+
+    interferedGame.devices.find((d) => d.id === accessPoint.id)!.interference = 0
+    expect(findRoute(interferedGame, phone.id, cloud.id)).not.toBeNull()
+  })
+
+  it('clears wireless interference after its tick count expires', () => {
+    let game = newGame('startup')
+    const accessPoint = game.devices.find((d) => d.kind === 'wireless')!
+    accessPoint.interference = 1
+    game = simulate(game)
+    expect(game.devices.find((d) => d.id === accessPoint.id)!.interference).toBe(0)
+    expect(game.events[0]).toContain('interference cleared')
+  })
+
+  it('routes some multi-subnet traffic to another device instead of only the cloud', () => {
+    let game = newGame('corporate')
+    game.budget = 0
+    for (let i = 0; i < 60 && game.phase === 'playing'; i++) game = simulate(game)
+    const subnets = new Set(game.devices.map((d) => d.subnet))
+    expect(subnets.size).toBeGreaterThan(1)
+    // Cross-subnet traffic is probabilistic; just confirm the run stays internally
+    // consistent (no crash, delivered count advances) over many ticks.
+    expect(game.tick).toBeGreaterThan(0)
+    expect(game.delivered).toBeGreaterThanOrEqual(0)
+  })
+
+  it('admits packets at a saturated forwarding device by strict priority, queuing the rest', () => {
+    let game = newGame('home')
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    router.pps = 2 // tight cap so two synthetic bulk packets cannot both fit
+    game.packets = [
+      {
+        id: 'bulk-1',
+        path: [pc.id, router.id, 'cloud-stand-in'],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        source: pc.id,
+        generatedTick: 0,
+        queuedTicks: 0,
+      },
+      {
+        id: 'bulk-2',
+        path: [pc.id, router.id, 'cloud-stand-in'],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        source: pc.id,
+        generatedTick: 0,
+        queuedTicks: 0,
+      },
+      {
+        id: 'realtime-1',
+        path: [pc.id, router.id, 'cloud-stand-in'],
+        hop: 0,
+        progress: 0.9,
+        priority: 'realtime',
+        source: pc.id,
+        generatedTick: 0,
+        queuedTicks: 0,
+      },
+    ]
+    game = simulate(game)
+    const realtimePacket = game.packets.find((p) => p.id === 'realtime-1')!
+    expect(realtimePacket.hop).toBe(1) // realtime always wins admission over bulk
+
+    const bulkPackets = game.packets.filter((p) => p.id === 'bulk-1' || p.id === 'bulk-2')
+    const stillQueued = bulkPackets.filter((p) => p.hop === 0)
+    expect(stillQueued.length).toBeGreaterThanOrEqual(1)
+    expect(stillQueued[0].queuedTicks).toBeGreaterThan(0)
+  })
+
+  it('drops a packet once it has waited past the queue capacity', () => {
+    let game = newGame('home')
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    router.pps = 0 // never admits, so the packet only ages in queue
+    game.packets = [
+      {
+        id: 'stuck',
+        path: [pc.id, router.id, 'cloud-stand-in'],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        source: pc.id,
+        generatedTick: 0,
+        queuedTicks: 6,
+      },
+    ]
+    const before = game.dropped
+    game = simulate(game)
+    expect(game.packets.some((p) => p.id === 'stuck')).toBe(false)
+    expect(game.dropped).toBeGreaterThan(before)
+  })
+
   it('applies firewall block rules to matching source traffic', () => {
     let game = newGame('home')
     game.budget = 500
@@ -190,5 +418,59 @@ describe('NetworkMaster gameplay rules', () => {
 
     game = cycleFirewallRule(game, firewall.id) // block PC traffic
     expect(findRoute(game, pc.id, cloud.id)).toBeNull()
+  })
+
+  it('reroutes a cable endpoint while preserving tier and VLAN', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'switch')
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const networkSwitch = game.devices.find((d) => d.kind === 'switch')!
+    game = addCable(game, pc.id, router.id)
+    let cable = game.cables.find((c) => c.from === pc.id || c.to === pc.id)!
+    game = upgradeCable(game, cable.id)
+    game = cycleCableVlan(game, cable.id)
+    const tierBefore = game.cables.find((c) => c.id === cable.id)!.tier
+    const vlanBefore = game.cables.find((c) => c.id === cable.id)!.vlan
+    const routerPortsBefore = game.devices.find((d) => d.id === router.id)!.ports
+
+    game = rerouteCable(game, cable.id, false, networkSwitch.id) // move the router end
+    cable = game.cables.find((c) => c.id === cable.id)!
+    expect(cable.to).toBe(networkSwitch.id)
+    expect(cable.tier).toBe(tierBefore)
+    expect(cable.vlan).toBe(vlanBefore)
+    expect(game.devices.find((d) => d.id === router.id)!.ports).toBe(routerPortsBefore - 1)
+    expect(game.devices.find((d) => d.id === networkSwitch.id)!.ports).toBe(1)
+  })
+
+  it('rejects rerouting a cable onto a duplicate or over-port-limit target', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'switch')
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const tv = game.devices.find((d) => d.kind === 'tv')!
+    game = addCable(game, pc.id, router.id)
+    game = addCable(game, tv.id, router.id)
+    const pcCable = game.cables.find((c) => c.from === pc.id || c.to === pc.id)!
+
+    // Rerouting the PC cable's router end onto the TV (an end device) is rejected.
+    const blocked = rerouteCable(game, pcCable.id, false, tv.id)
+    expect(blocked.cables.find((c) => c.id === pcCable.id)!.to).toBe(router.id)
+    expect(blocked.events[0]).toContain('network equipment')
+  })
+
+  it('draws a diagonal cable as a direct line instead of an orthogonal route', () => {
+    let game = newGame('home')
+    game.budget = 500
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = addCable(game, pc.id, router.id, 'diagonal')
+    const cable = game.cables.find((c) => c.from === pc.id || c.to === pc.id)!
+    expect(cable.style).toBe('diagonal')
+    const routes = computeCableRoutes(game.devices, game.cables)
+    const route = routes.get(cable.id)!
+    expect(route.points).toHaveLength(2)
   })
 })

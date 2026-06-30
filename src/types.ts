@@ -20,6 +20,8 @@ export type CableTier =
   | '50 Gigabit'
   | '100 Gigabit'
 export type Priority = 'bulk' | 'stream' | 'realtime'
+/** Right-angle cables route through the orthogonal lane planner; diagonal cables draw a direct line. */
+export type CableStyle = 'rightAngle' | 'diagonal'
 
 /** A node in the network topology. Coordinates are canvas percentages. */
 export type Device = {
@@ -40,6 +42,8 @@ export type Device = {
   firewallRule: DeviceKind | null
   generated: number
   delivered: number
+  /** Ticks remaining of Wi-Fi interference (wireless access points only); shrinks range/throughput. */
+  interference: number
 }
 
 /** An undirected, capacity-limited edge in the network graph. */
@@ -55,6 +59,7 @@ export type Cable = {
   vlan: number | null
   upgradeSpend: number
   failedTicks: number
+  style: CableStyle
 }
 
 /** Kinds of timed challenge event the simulation can roll, mirroring the native roster. */
@@ -77,11 +82,13 @@ export type Packet = {
   priority: Priority
   source: string
   generatedTick: number
+  /** Ticks this packet has spent waiting in a forwarding device's queue. */
+  queuedTicks: number
 }
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
-  version: 3
+  version: 6
   phase: 'playing' | 'paused' | 'gameover'
   scenario: string
   tick: number

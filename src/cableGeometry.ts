@@ -12,8 +12,7 @@ const LANE_OFFSETS = [0, -4, 4, -8, 8]
 const segmentsFor = (points: CanvasPoint[]): Segment[] =>
   points.slice(1).map((end, index) => ({ start: points[index], end }))
 
-const segmentLength = ({ start, end }: Segment) =>
-  Math.abs(end.x - start.x) + Math.abs(end.y - start.y)
+const segmentLength = ({ start, end }: Segment) => Math.hypot(end.x - start.x, end.y - start.y)
 
 function segmentCrossesDevice(segment: Segment, device: Device): boolean {
   const left = device.x - DEVICE_HALF_WIDTH
@@ -99,6 +98,13 @@ export function computeCableRoutes(devices: Device[], cables: Cable[]): Map<stri
     const startDevice = devices.find((device) => device.id === cable.from)
     const endDevice = devices.find((device) => device.id === cable.to)
     if (!startDevice || !endDevice) continue
+    if (cable.style === 'diagonal') {
+      // Diagonal cables draw a direct line through the lane grid rather than
+      // routing around obstacles, so they never enter the orthogonal scoring
+      // or occupancy tracking below.
+      routes.set(cable.id, { cableId: cable.id, points: [startDevice, endDevice] })
+      continue
+    }
     const obstacles = devices.filter(
       (device) => device.id !== startDevice.id && device.id !== endDevice.id,
     )
