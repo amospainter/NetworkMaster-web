@@ -352,6 +352,18 @@ nav > div {
   font: 9px DM Mono;
   color: var(--muted);
 }
+.legal-footer {
+  padding-top: 0;
+  border-top: 1px solid var(--line);
+}
+.legal-footer a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.legal-footer a:hover {
+  color: var(--ink);
+}
 .game-shell {
   height: 100vh;
   display: grid;

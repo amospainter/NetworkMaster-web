@@ -20,22 +20,61 @@ Run `npm run check` before considering any change complete.
 
 ## File map
 
-| File                   | Purpose                                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `src/App.vue`          | Application shell, menu, HUD, canvas, inspectors, pointer interactions, and dialogs                  |
-| `src/game.ts`          | Framework-independent scenarios, routing, simulation tick, economy, upgrades, and topology mutations |
-| `src/cableGeometry.ts` | Orthogonal display routing, obstacle/overlap scoring, SVG paths, and packet interpolation            |
-| `src/types.ts`         | Versioned persisted game model and shared gameplay types                                             |
-| `src/game.test.ts`     | Gameplay regression tests                                                                            |
-| `src/styles.css`       | Main responsive visual system                                                                        |
-| `src/interaction.css`  | Cable hit targets, dragging, Wi-Fi zones, and upgrade-control styles                                 |
-| `PARITY.md`            | Implemented and remaining native gameplay parity                                                     |
-| `HOWTOPLAY.md`         | Full player-facing rules reference; the in-app Help modal is a condensed, tabbed version of it       |
-| `eslint.config.js`     | Vue and TypeScript lint rules                                                                        |
+| File                   | Purpose                                                                                                                                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/App.vue`          | Root shell: still owns `game`/`selected`/`cableStart`/`modal` state and the canvas, device/cable inspectors, and secondary modals (help/upgrades/stats/leaderboard) — the highest-interdependency UI, not yet split further |
+| `src/components/`      | Extracted, single-purpose presentational components (see below)                                                                                                                                                             |
+| `src/composables/`     | Extracted stateful logic reused by/isolated from `App.vue` (see below)                                                                                                                                                      |
+| `src/deviceIcons.ts`   | `deviceIcons` map and `BUILD_OPTIONS`, shared by `App.vue`, `BuildPanel.vue`, and any future canvas/inspector split                                                                                                         |
+| `src/game/`            | Framework-independent gameplay engine, split by concern (see below); `index.ts` is the public barrel                                                                                                                        |
+| `src/cableGeometry.ts` | Orthogonal display routing, obstacle/overlap scoring, SVG paths, and packet interpolation                                                                                                                                   |
+| `src/types.ts`         | Versioned persisted game model and shared gameplay types                                                                                                                                                                    |
+| `src/game.test.ts`     | Gameplay regression tests                                                                                                                                                                                                   |
+| `src/styles.css`       | Main responsive visual system                                                                                                                                                                                               |
+| `src/interaction.css`  | Cable hit targets, dragging, Wi-Fi zones, and upgrade-control styles                                                                                                                                                        |
+| `PARITY.md`            | Implemented and remaining native gameplay parity                                                                                                                                                                            |
+| `HOWTOPLAY.md`         | Full player-facing rules reference; the in-app Help modal is a condensed, tabbed version of it                                                                                                                              |
+| `eslint.config.js`     | Vue and TypeScript lint rules                                                                                                                                                                                               |
+
+### `src/components/` and `src/composables/` breakdown
+
+`App.vue` was ~1244 lines before this split; extraction is intentionally incremental (composables first, then only the lowest-coupling leaf components) rather than a single rewrite, so each step could be verified independently against `npm run check` and a live smoke test before the next.
+
+| File                                | Owns                                                                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `composables/useCanvasPanZoom.ts`   | Wheel-zoom / drag-to-pan state and handlers for the topology canvas.                                                                                                                        |
+| `composables/useSimulationClock.ts` | The tick `setInterval` (synced to pause/speed) and the `requestAnimationFrame` clock behind `packetVisualProgress`.                                                                         |
+| `composables/useLeaderboard.ts`     | Loads/persists the personal leaderboard; records an entry on the `phase` → `'gameover'` transition internally.                                                                              |
+| `composables/useTutorial.ts`        | The 5-step onboarding card's step/active state and `TUTORIAL_STEPS` content.                                                                                                                |
+| `composables/useOfflineBlink.ts`    | The `offlineBlinkOn` toggle interval powering the offline-device icon swap.                                                                                                                 |
+| `components/MenuScreen.vue`         | The main menu: hero, scenario grid, legal footer. `v-model:chosen`/`v-model:dark`, emits `start`/`continueGame`/`openLeaderboard`.                                                          |
+| `components/GameHud.vue`            | Top bar + score/budget/failure-pressure HUD. `v-model:dark`, emits `openUpgrades`/`openHelp`/`exitToMenu`/`togglePause` (never mutates the `game` prop directly — `vue/no-mutating-props`). |
+| `components/BuildPanel.vue`         | The left equipment-purchase list. Emits `place(kind)`.                                                                                                                                      |
+| `components/GameOverModal.vue`      | The game-over card. Emits `tryAgain`/`continueUnscored`/`openLeaderboard`/`mainMenu`.                                                                                                       |
+
+Still living in `App.vue` (deliberately, for now): the canvas (SVG links, Wi-Fi zones, devices, packets, minimap, cable labels, tutorial card, advisor tip), the device/cable inspector, and the secondary modals (help/upgrades/stats/leaderboard). These share the deepest state (`selected`, `cableStart`, `cableStyle`, `reroutingCable`, drag handlers) and were judged higher-risk to split without a proper provide/inject or state-management pass — see PARITY-style tracking below before attempting it.
 
 ## Architecture
 
-`App.vue` owns reactive UI state and calls pure reducers from `game.ts`. Gameplay functions return a new JSON-safe `GameState`; they must not mutate the state object supplied by Vue. `cloneState` strips Vue proxies before a reducer changes its copy.
+`App.vue` owns reactive UI state and calls pure reducers imported from `./game` (the `src/game/` barrel). Gameplay functions return a new JSON-safe `GameState`; they must not mutate the state object supplied by Vue. `cloneState` strips Vue proxies before a reducer changes its copy.
+
+### `src/game/` module breakdown
+
+`src/game/index.ts` re-exports the engine's public API by name (not `export *`) so it doubles as documentation of what `App.vue`/`game.test.ts` may depend on. Internal helpers stay private to their owning module. Dependency order (each only imports from modules above it):
+
+| Module           | Contents                                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `constants.ts`   | Pure data only: `SCENARIOS`, `CABLE_TIERS`, `WIFI_STANDARDS`, `DEVICE_RULES`, `MILESTONES`, cost/upgrade tables.      |
+| `utils.ts`       | `createId`, `cloneState`, `event`/`addEvent`, `distanceBetween`, `discountedSiteCost` — generic, no game-rule logic.  |
+| `factories.ts`   | `createDevice`, `createCable`, `connectDevices`, `createScenarioTopology`.                                            |
+| `wireless.ts`    | `hubRange`, `hubPps`, `deviceCapacity`, hub selection/load-balancing, `servingWirelessHub`, `wifiInfo`.               |
+| `routing.ts`     | `findRoute` (BFS), `independentPathCount`, cross-subnet destination/route helpers.                                    |
+| `persistence.ts` | `newGame`, `networkHealthBonus`, `migrateSavedGame` — everything touching the versioned schema.                       |
+| `simulate.ts`    | The `simulate()` tick reducer and its private helpers (challenge events, milestones, Wi-Fi interference, warmup).     |
+| `topology.ts`    | Structural mutations: `addCable`, `rerouteCable`, `buildDevice`, `removeDevice`, `moveDevice`, VLAN/firewall cycling. |
+| `upgrades.ts`    | Economy/purchasing: per-item and site-wide upgrades, repair.                                                          |
+
+When adding a gameplay function, put it in the module matching its concern above, add it to `index.ts`'s explicit export list if `App.vue` or tests need it, and keep imports flowing downward through this table (e.g. `simulate.ts` may import from `routing.ts`, never the reverse) to avoid circular imports.
 
 The simulation runs every 800 ms at normal speed:
 
@@ -57,7 +96,7 @@ Coordinates are stored as percentages so one topology works across iPad and desk
 - Tutorial-seen flag: `networkmaster.tutorial-seen.v1` — presence (any value) suppresses the onboarding card on future visits.
 - Current `GameState.version`: `8`
 
-Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, version 5 runs (which predate `Cable.style`) to version 6, version 6 runs (which predate latency/queue-delay telemetry) to version 7, and version 7 runs (whose `events` were plain strings) to version 8 by stamping each with the save's current tick; `App.vue`'s loader delegates to it.
+Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game/persistence.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, version 5 runs (which predate `Cable.style`) to version 6, version 6 runs (which predate latency/queue-delay telemetry) to version 7, and version 7 runs (whose `events` were plain strings) to version 8 by stamping each with the save's current tick; `App.vue`'s loader delegates to it.
 
 ## Gameplay invariants
 
@@ -91,13 +130,13 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - `advisorTip` is a computed, prioritized one-liner ("Jackie") reading live game state (failure pressure, congestion, out-of-range devices, budget, queue delay, combo) — pure presentation, not persisted or part of `GameState`.
 - The tutorial is a 5-step onboarding card shown once per browser (gated by `TUTORIAL_SEEN_KEY`), entirely client-side UI state (`tutorialStep`/`tutorialActive`), not tied to `GameState`.
 - Cable labels sit at `pointAlongRoute(route.points, 0.5)` — the actual routed midpoint, not the geometric midpoint of the endpoints — so the label follows orthogonal bends correctly. Each shows the cable's tier/speed (always neutral `--ink`) above its live `load/capacity` traffic figure, which is colored by the same `active`/`congested`/`failed` status class as the link itself.
-- Device throughput bars (canvas + inspector) compare `deviceThroughputUsed` (sum of load on a device's attached cables) against `deviceCapacity` (exported from `game.ts`; `hubPps` for wireless, `pps` otherwise) — this is a display-only approximation of admitted traffic, not the exact per-tick admission count from `simulate`.
+- Device throughput bars (canvas + inspector) compare `deviceThroughputUsed` (sum of load on a device's attached cables) against `deviceCapacity` (exported from `game/wireless.ts`; `hubPps` for wireless, `pps` otherwise) — this is a display-only approximation of admitted traffic, not the exact per-tick admission count from `simulate`.
 - An offline device (`Device.offline`) blinks between its normal icon and an `Unplug` icon. This is Vue-data-driven, not CSS-animation-driven: a single `offlineBlinkOn` ref flips every 800ms (one `setInterval` for the whole app), and each device's icon is `v-if="!d.offline || offlineBlinkOn"` vs. `v-else` `<Unplug>` — an online device's condition is always true regardless of the shared flag, so only offline devices ever toggle. (An earlier CSS-`animation`-based version was replaced after a bug where all devices appeared to blink.)
 
 ## Code standards
 
 - Prefer descriptive domain names such as `networkCable`, `sourceDevice`, and `rollingDropTotal`; avoid one-letter variables outside tiny coordinate math.
-- Keep gameplay logic in `game.ts`, not Vue templates.
+- Keep gameplay logic in `src/game/`, not Vue templates.
 - Use named Vue event handlers when an interaction performs more than one statement.
 - Add docblocks for exported gameplay functions and comments for non-obvious invariants or geometry. Do not comment self-evident syntax.
 - Keep all persisted state serializable—no DOM objects, Vue refs, class instances, functions, Maps, or Sets in `GameState`.

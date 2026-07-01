@@ -1,34 +1,27 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   Activity,
   Cable as CableIcon,
-  CirclePause,
-  CirclePlay,
-  Cloud,
   EthernetPort,
-  Gamepad2,
-  HelpCircle,
-  Monitor,
-  Moon,
   Network,
-  Plus,
-  Radio,
-  RotateCcw,
-  Server,
-  Shield,
-  Smartphone,
-  Sun,
-  Tablet,
   Trash2,
-  Tv,
   Unplug,
-  Wifi,
   Wrench,
   X,
   Zap,
 } from 'lucide-vue-next'
 import { computeCableRoutes, pointAlongRoute, routeToSvgPath } from './cableGeometry'
+import BuildPanel from './components/BuildPanel.vue'
+import GameHud from './components/GameHud.vue'
+import GameOverModal from './components/GameOverModal.vue'
+import MenuScreen from './components/MenuScreen.vue'
+import { useCanvasPanZoom } from './composables/useCanvasPanZoom'
+import { LEADERBOARD_SIZE, useLeaderboard } from './composables/useLeaderboard'
+import { useOfflineBlink } from './composables/useOfflineBlink'
+import { useSimulationClock } from './composables/useSimulationClock'
+import { TUTORIAL_STEPS, useTutorial } from './composables/useTutorial'
+import { deviceIcons } from './deviceIcons'
 import {
   addCable,
   buildDevice,
@@ -49,7 +42,6 @@ import {
   rerouteCable,
   SCENARIOS,
   servingWirelessHub,
-  simulate,
   siteCableUpgradeFullCost,
   siteCableUpgradeTargets,
   upgradeAllCables,
@@ -62,34 +54,11 @@ import {
   wifiInfo,
   WIRELESS_CAPABLE_KINDS,
 } from './game'
-import type { CableTier, Device, DeviceKind, GameState, LeaderboardEntry } from './types'
+import type { CableTier, Device, DeviceKind, GameState } from './types'
 
 const ACTIVE_RUN_STORAGE_KEY = 'networkmaster.active-run.v1'
 const HIGH_SCORE_STORAGE_KEY = 'networkmaster.best.v1'
-const LEADERBOARD_STORAGE_KEY = 'networkmaster.leaderboard.v1'
-const TUTORIAL_SEEN_KEY = 'networkmaster.tutorial-seen.v1'
-const LEADERBOARD_SIZE = 10
 
-const deviceIcons = {
-  cloud: Cloud,
-  router: Radio,
-  switch: Network,
-  pc: Monitor,
-  tv: Tv,
-  console: Gamepad2,
-  phone: Smartphone,
-  tablet: Tablet,
-  server: Server,
-  firewall: Shield,
-  wireless: Wifi,
-}
-const BUILD_OPTIONS: [DeviceKind, string, number][] = [
-  ['switch', 'Switch', 80],
-  ['router', 'Router', 140],
-  ['wireless', 'Wireless', 90],
-  ['firewall', 'Firewall', 110],
-  ['server', 'Server', 120],
-]
 /** Friendly speed labels for the site cable-upgrade picker, keyed by cable tier. */
 const TIER_SPEED_LABEL: Record<CableTier, string> = {
   Copper: '10 Mbps',
@@ -112,15 +81,6 @@ const loadSavedGame = () => {
     return null
   }
 }
-/** Loads the personal leaderboard; malformed or missing storage starts empty. */
-const loadLeaderboard = (): LeaderboardEntry[] => {
-  try {
-    const stored = JSON.parse(localStorage.getItem(LEADERBOARD_STORAGE_KEY) || '[]')
-    return Array.isArray(stored) ? stored : []
-  } catch {
-    return []
-  }
-}
 const screen = ref<'menu' | 'game'>('menu')
 const game = ref<GameState | null>(loadSavedGame())
 const selected = ref<string | null>(null)
@@ -131,10 +91,14 @@ const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(n
 const modal = ref<'help' | 'stats' | 'upgrades' | 'leaderboard' | null>(null)
 const HELP_SECTIONS = ['Basics', 'Devices & Wi-Fi', 'Scoring & economy', 'Survival'] as const
 const helpSection = ref<(typeof HELP_SECTIONS)[number]>('Basics')
+/** Target tier for the site-wide cable rollout picker; defaults to the cheapest upgrade. */
+const cableUpgradeTarget = ref<CableTier>('Fast Ethernet')
 const dark = ref(true)
 const chosen = ref('home')
 const best = ref(Number(localStorage.getItem(HIGH_SCORE_STORAGE_KEY) || 0))
-const leaderboard = ref<LeaderboardEntry[]>(loadLeaderboard())
+const { leaderboard } = useLeaderboard(game)
+const { tutorialStep, tutorialActive, dismissTutorial, advanceTutorial } = useTutorial()
+const { offlineBlinkOn } = useOfflineBlink()
 const picked = computed(() => game.value?.devices.find((device) => device.id === selected.value))
 const pickedCable = computed(() =>
   game.value?.cables.find((networkCable) => networkCable.id === selected.value),
@@ -180,69 +144,15 @@ function throughputRatio(device: Device): number {
   return deviceThroughputUsed(device) / deviceCapacity(device)
 }
 
-const ZOOM_MIN = 0.6
-const ZOOM_MAX = 2.5
-const zoom = ref(1)
-const panX = ref(0)
-const panY = ref(0)
-const canvasTransform = computed(
-  () => `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
-)
-let activePan: { startX: number; startY: number; originX: number; originY: number } | null = null
-
-/** Starts a background drag-to-pan; ignored while drawing/rerouting a cable. */
-function startCanvasPan(event: PointerEvent) {
-  if (cableStart.value || reroutingCable.value) return
-  activePan = {
-    startX: event.clientX,
-    startY: event.clientY,
-    originX: panX.value,
-    originY: panY.value,
-  }
-  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
-}
-function moveCanvasPan(event: PointerEvent) {
-  if (!activePan) return
-  panX.value = activePan.originX + (event.clientX - activePan.startX)
-  panY.value = activePan.originY + (event.clientY - activePan.startY)
-}
-function endCanvasPan() {
-  activePan = null
-}
-function zoomBy(delta: number) {
-  zoom.value = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom.value + delta))
-}
-/** Wheel-to-zoom, centered visually since the stage transform scales from its center. */
-function handleCanvasWheel(event: WheelEvent) {
-  event.preventDefault()
-  zoomBy(event.deltaY > 0 ? -0.15 : 0.15)
-}
-function resetView() {
-  zoom.value = 1
-  panX.value = 0
-  panY.value = 0
-}
-
-const TUTORIAL_STEPS = [
-  'Pick a scenario and start a run — every network begins on a clean slate.',
-  'Select a device, choose "Begin cable", then tap its destination to wire them together.',
-  'Phones and tablets only join through Wi-Fi coverage; other end devices can use either a cable or Wi-Fi.',
-  'Watch the canvas: packets animate along your cables. Orange links are over capacity — upgrade the link or add another route.',
-  'Open Site Upgrades for discounted bulk upgrades, and check Run Stats for live delivery telemetry.',
-]
-const tutorialStep = ref(0)
-const tutorialActive = ref(localStorage.getItem(TUTORIAL_SEEN_KEY) === null)
-function dismissTutorial() {
-  tutorialActive.value = false
-  localStorage.setItem(TUTORIAL_SEEN_KEY, '1')
-}
-function advanceTutorial() {
-  if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
-    dismissTutorial()
-    return
-  }
-  tutorialStep.value++
-}
+const {
+  canvasTransform,
+  startCanvasPan,
+  moveCanvasPan,
+  endCanvasPan,
+  zoomBy,
+  handleCanvasWheel,
+  resetView,
+} = useCanvasPanZoom(cableStart, reroutingCable)
 
 /** A single contextual tip from "Jackie", the in-game advisor, prioritized by urgency. */
 const advisorTip = computed(() => {
@@ -269,29 +179,9 @@ const advisorTip = computed(() => {
   return 'Network looks steady. Keep an eye on capacity as traffic ramps up.'
 })
 
-let simulationTimer: number | undefined
-let animationFrame: number | undefined
-const animationTime = ref(performance.now())
-const lastSimulationTickTime = ref(performance.now())
+const { packetVisualProgress } = useSimulationClock(game, screen)
 
-const simulationInterval = () => 800 / (game.value?.speed ?? 1)
-
-/** Keeps the browser timer synchronized with pause and speed controls. */
-const synchronizeSimulationTimer = () => {
-  clearInterval(simulationTimer)
-  lastSimulationTickTime.value = performance.now()
-  if (game.value && screen.value === 'game' && game.value.phase === 'playing') {
-    simulationTimer = window.setInterval(() => {
-      if (game.value) {
-        lastSimulationTickTime.value = performance.now()
-        game.value = simulate(game.value)
-      }
-    }, simulationInterval())
-  }
-}
-watch([() => game.value?.phase, () => game.value?.speed, screen], synchronizeSimulationTimer, {
-  immediate: true,
-})
+/** Persists the active run and tracks the personal best on every change. */
 watch(
   game,
   (currentGame) => {
@@ -304,34 +194,6 @@ watch(
   },
   { deep: true },
 )
-/** Appends a leaderboard entry exactly once, on the transition into game over. */
-watch(
-  () => game.value?.phase,
-  (phase, previousPhase) => {
-    if (phase !== 'gameover' || previousPhase === 'gameover' || !game.value) return
-    recordLeaderboardEntry(game.value)
-  },
-)
-/** Drives the offline-device icon swap; data-driven so only `.offline` devices ever toggle. */
-const offlineBlinkOn = ref(true)
-let offlineBlinkTimer: number | undefined
-
-onMounted(() => {
-  const updateAnimationClock = (timestamp: number) => {
-    animationTime.value = timestamp
-    animationFrame = requestAnimationFrame(updateAnimationClock)
-  }
-  animationFrame = requestAnimationFrame(updateAnimationClock)
-  offlineBlinkTimer = window.setInterval(() => {
-    offlineBlinkOn.value = !offlineBlinkOn.value
-  }, 800)
-})
-
-onBeforeUnmount(() => {
-  clearInterval(simulationTimer)
-  clearInterval(offlineBlinkTimer)
-  if (animationFrame !== undefined) cancelAnimationFrame(animationFrame)
-})
 
 /** Starts a fresh run and clears transient canvas selection. */
 function start(scenarioId: string) {
@@ -409,30 +271,6 @@ function removeSelectedDevice() {
 
 const siteDiscountedCost = (fullPrice: number) => Math.floor(fullPrice * 0.85)
 
-/** Creates an entry id in modern browsers and a non-secure-context fallback elsewhere. */
-const createEntryId = () =>
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
-
-/** Appends a finished run to the local leaderboard, keeping the top scores. */
-function recordLeaderboardEntry(finishedGame: GameState) {
-  leaderboard.value = [
-    ...leaderboard.value,
-    {
-      id: createEntryId(),
-      scenario: finishedGame.scenario,
-      score: finishedGame.score,
-      delivered: finishedGame.delivered,
-      tick: finishedGame.tick,
-      completedAt: Date.now(),
-    },
-  ]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, LEADERBOARD_SIZE)
-  localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(leaderboard.value))
-}
-
 /** Resumes a failed topology without allowing additional leaderboard scoring. */
 function continueUnscored() {
   if (!game.value) return
@@ -452,14 +290,6 @@ function cableLabelPos(cableId: string): { x: number; y: number } {
   const route = cableRoutes.value.get(cableId)
   if (!route) return { x: 0, y: 0 }
   return pointAlongRoute(route.points, 0.5)
-}
-
-/** Smoothly advances the visual half-hop between discrete simulation ticks. */
-function packetVisualProgress(simulationProgress: number): number {
-  if (game.value?.phase !== 'playing') return simulationProgress
-  const elapsed = animationTime.value - lastSimulationTickTime.value
-  const tickFraction = Math.max(0, Math.min(1, elapsed / simulationInterval()))
-  return Math.min(0.999, simulationProgress + tickFraction * 0.5)
 }
 
 /** Maps packet progress onto the routed geometry of its current cable. */
@@ -522,118 +352,27 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
 
 <template>
   <main class="app" :class="{ dark }">
-    <div v-if="screen === 'menu'" class="menu-page">
-      <nav>
-        <div class="brand">
-          <Network /><span>NETWORK<span>MASTER</span></span>
-        </div>
-        <div>
-          <button @click="dark = !dark"><Sun v-if="dark" /><Moon v-else /></button
-          ><span class="local-pill">LOCAL SAVE</span>
-        </div>
-      </nav>
-      <section class="hero">
-        <p class="overline">SYSTEM ONLINE · CLIENT-SIDE SIMULATION</p>
-        <h1>Build the network.<br /><em>Keep it alive.</em></h1>
-        <p class="lede">
-          Every packet needs a path. Every path has a limit. Design a resilient topology before
-          demand overwhelms it.
-        </p>
-        <div class="hero-actions">
-          <button class="primary" @click="start(chosen)"><CirclePlay /> Start new run</button
-          ><button v-if="game" @click="screen = 'game'">Continue · score {{ game.score }}</button>
-        </div>
-        <div class="best">
-          <span>PERSONAL BEST</span><b>{{ best.toLocaleString() }}</b
-          ><button @click="modal = 'leaderboard'">Leaderboard</button>
-        </div>
-      </section>
-      <section class="scenario-section">
-        <div class="section-head">
-          <div>
-            <p class="overline">CHOOSE YOUR NETWORK</p>
-            <h2>Scenarios</h2>
-          </div>
-          <p>Each topology brings a different kind of trouble.</p>
-        </div>
-        <div class="scenario-grid">
-          <button
-            v-for="(s, i) in SCENARIOS"
-            :key="s.id"
-            class="scenario-card"
-            :class="{ selected: chosen === s.id }"
-            @click="chosen = s.id"
-          >
-            <span class="num">0{{ i + 1 }}</span>
-            <div class="topology-mini"><i /><i /><i /><i /></div>
-            <p>{{ s.eyebrow }}</p>
-            <h3>{{ s.name }}</h3>
-            <span>{{ s.description }}</span>
-            <div class="difficulty">
-              DIFFICULTY <i v-for="n in 5" :key="n" :class="{ on: n <= s.difficulty }" />
-            </div>
-          </button>
-        </div>
-      </section>
-      <footer class="menu-footer">
-        <span>NO ACCOUNT · NO CLOUD · YOUR NETWORK STAYS YOURS</span><span>VUE 3 · v0.1.0</span>
-      </footer>
-    </div>
+    <MenuScreen
+      v-if="screen === 'menu'"
+      v-model:chosen="chosen"
+      v-model:dark="dark"
+      :game="game"
+      :best="best"
+      @start="start"
+      @continue-game="screen = 'game'"
+      @open-leaderboard="modal = 'leaderboard'"
+    />
     <div v-else-if="game" class="game-shell">
-      <header class="topbar">
-        <div class="brand small">
-          <Network /><span>NETWORK<span>MASTER</span></span>
-        </div>
-        <div class="scenario-tag">{{ SCENARIOS.find((s) => s.id === game!.scenario)?.name }}</div>
-        <div class="top-actions">
-          <button class="upgrade-nav" @click="modal = 'upgrades'"><Zap /> Site Upgrades</button
-          ><button @click="modal = 'help'"><HelpCircle /> Help</button
-          ><button @click="dark = !dark"><Sun v-if="dark" /><Moon v-else /></button
-          ><button @click="screen = 'menu'">Exit</button>
-        </div>
-      </header>
-      <section class="hud">
-        <div class="metric accent">
-          <span>Score · {{ game.multiplier }}×</span><b>{{ game.score.toLocaleString() }}</b>
-        </div>
-        <div class="metric">
-          <span>Delivered</span><b>{{ game.delivered }}</b>
-        </div>
-        <div class="metric" :class="{ 'danger-text': game.dropped }">
-          <span>Dropped</span><b>{{ game.dropped }}</b>
-        </div>
-        <div class="metric">
-          <span>Combo</span><b>{{ game.combo }}×</b>
-        </div>
-        <div class="metric">
-          <span>Budget</span><b>${{ game.budget }}</b>
-        </div>
-        <div class="pressure">
-          <span
-            >Failure pressure <b>{{ Math.round(game.failure) }}%</b></span
-          >
-          <div><i :style="{ width: game.failure + '%' }" /></div>
-        </div>
-        <button class="pause" @click="game.phase = game.phase === 'playing' ? 'paused' : 'playing'">
-          <CirclePause v-if="game.phase === 'playing'" /><CirclePlay v-else />{{
-            game.phase === 'playing' ? 'Pause' : 'Resume'
-          }}
-        </button>
-      </section>
+      <GameHud
+        v-model:dark="dark"
+        :game="game"
+        @open-upgrades="modal = 'upgrades'"
+        @open-help="modal = 'help'"
+        @exit-to-menu="screen = 'menu'"
+        @toggle-pause="game.phase = game.phase === 'playing' ? 'paused' : 'playing'"
+      />
       <div class="workspace">
-        <aside class="build-panel">
-          <div class="panel-title"><Plus /> BUILD</div>
-          <button
-            v-for="[kind, label, cost] in BUILD_OPTIONS"
-            :key="kind"
-            :disabled="game.budget < cost"
-            @click="placeDevice(kind)"
-          >
-            <component :is="deviceIcons[kind]" /><span
-              >{{ label }}<small>${{ cost }}</small></span
-            >
-          </button>
-        </aside>
+        <BuildPanel :budget="game.budget" @place="placeDevice" />
         <div
           class="canvas"
           @wheel="handleCanvasWheel"
@@ -1007,24 +746,14 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         ><button @click="modal = 'stats'">RUN STATS</button>
       </footer>
     </div>
-    <div v-if="game?.phase === 'gameover'" class="modal-backdrop">
-      <div class="modal">
-        <p class="overline danger-text">NETWORK FAILURE</p>
-        <h1>The network went dark.</h1>
-        <p>
-          Your topology delivered <b>{{ game.delivered }}</b> packets before the rolling loss window
-          exceeded its threshold.
-        </p>
-        <div class="final-score">
-          {{ game.score.toLocaleString()
-          }}<small>FINAL SCORE · {{ game.tick }} TICKS · {{ game.dropped }} DROPPED</small>
-        </div>
-        <button class="primary" @click="start(game.scenario)"><RotateCcw /> Try again</button
-        ><button @click="continueUnscored">Continue unscored</button
-        ><button @click="modal = 'leaderboard'">Leaderboard</button
-        ><button @click="screen = 'menu'">Main menu</button>
-      </div>
-    </div>
+    <GameOverModal
+      v-if="game?.phase === 'gameover'"
+      :game="game"
+      @try-again="start"
+      @continue-unscored="continueUnscored"
+      @open-leaderboard="modal = 'leaderboard'"
+      @main-menu="screen = 'menu'"
+    />
     <div v-if="modal" class="modal-backdrop" @mousedown.self="modal = null">
       <div class="modal">
         <button class="close" @click="modal = null"><X /></button
@@ -1146,19 +875,25 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           <h1>Upgrade the whole network.</h1>
           <p>Bulk upgrades cost less per component and apply instantly.</p>
           <div class="upgrade-list">
-            <button
-              v-for="tier in CABLE_TIERS.slice(1)"
-              :key="'site-cable-' + tier.name"
-              @click="setGame(upgradeAllCables(game!, tier.name))"
-            >
+            <div class="upgrade-picker">
+              <label for="cable-upgrade-target"><CableIcon /> Connection rollout target</label>
+              <select id="cable-upgrade-target" v-model="cableUpgradeTarget">
+                <option v-for="tier in CABLE_TIERS.slice(1)" :key="tier.name" :value="tier.name">
+                  {{ tier.name }} · {{ TIER_SPEED_LABEL[tier.name] }}
+                </option>
+              </select>
+            </div>
+            <button @click="setGame(upgradeAllCables(game!, cableUpgradeTarget))">
               <span
-                ><CableIcon /><b>{{ tier.name }} rollout</b
+                ><CableIcon /><b>Upgrade to {{ cableUpgradeTarget }}</b
                 ><small>
-                  {{ siteCableUpgradeTargets(game!, tier.name).length }} link(s) below
-                  {{ TIER_SPEED_LABEL[tier.name] }}</small
+                  {{ siteCableUpgradeTargets(game!, cableUpgradeTarget).length }} link(s) below
+                  {{ TIER_SPEED_LABEL[cableUpgradeTarget] }}</small
                 ></span
               ><strong
-                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, tier.name)) }}</strong
+                >${{
+                  siteDiscountedCost(siteCableUpgradeFullCost(game!, cableUpgradeTarget))
+                }}</strong
               >
             </button>
             <button @click="setGame(upgradeAllPorts(game!))">

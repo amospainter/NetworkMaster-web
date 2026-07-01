@@ -181,6 +181,36 @@
   color: #15978d;
 }
 
+.upgrade-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px;
+}
+
+.upgrade-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.upgrade-picker svg {
+  color: #15978d;
+  width: 17px;
+}
+
+.upgrade-picker select {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
 .help-tabs {
   display: flex;
   flex-wrap: wrap;
