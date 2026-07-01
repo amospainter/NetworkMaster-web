@@ -19,6 +19,8 @@ import {
   simulate,
   upgradeAllCables,
   upgradeCable,
+  upgradeDeviceSpeed,
+  upgradeWifi,
 } from './game'
 import type { GameState } from './types'
 
@@ -151,6 +153,49 @@ describe('NetworkMaster gameplay rules', () => {
         expect(c.capacity).toBe(10)
         expect(c.upgradeSpend).toBeGreaterThan(fastEthernetSpend)
       })
+  })
+
+  it('site cable upgrade extends past Gigabit to 5 Gigabit and beyond', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    game = addCable(game, pc.id, router.id)
+    game = upgradeAllCables(game, '5 Gigabit')
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    game.cables
+      .filter((c) => c.from !== cloud.id && c.to !== cloud.id)
+      .forEach((c) => {
+        expect(c.tier).toBe('5 Gigabit')
+        expect(c.capacity).toBe(50)
+      })
+  })
+
+  it('gives wireless access points a single port', () => {
+    const game = newGame('startup')
+    const accessPoint = game.devices.find((d) => d.kind === 'wireless')!
+    expect(accessPoint.maxPorts).toBe(1)
+  })
+
+  it('upgrades wireless throughput independently of its Wi-Fi generation', () => {
+    let gameWithSpeedBump = newGame('startup')
+    gameWithSpeedBump.budget = 1000
+    const apWithSpeedBump = gameWithSpeedBump.devices.find((d) => d.kind === 'wireless')!
+    const basePps = apWithSpeedBump.pps
+    gameWithSpeedBump = upgradeDeviceSpeed(gameWithSpeedBump, apWithSpeedBump.id)
+    gameWithSpeedBump = upgradeWifi(gameWithSpeedBump, apWithSpeedBump.id)
+    const speedThenWifiPps = gameWithSpeedBump.devices.find((d) => d.id === apWithSpeedBump.id)!.pps
+
+    let gameWifiOnly = newGame('startup')
+    gameWifiOnly.budget = 1000
+    const apWifiOnly = gameWifiOnly.devices.find((d) => d.kind === 'wireless')!
+    gameWifiOnly = upgradeWifi(gameWifiOnly, apWifiOnly.id)
+    const wifiOnlyPps = gameWifiOnly.devices.find((d) => d.id === apWifiOnly.id)!.pps
+
+    // The +2 forwarding-speed bonus survives the later Wi-Fi generation
+    // upgrade instead of being wiped out by it.
+    expect(speedThenWifiPps).toBe(wifiOnlyPps + 2)
+    expect(speedThenWifiPps).toBeGreaterThan(basePps)
   })
 
   it('advances simulation and maintains a 20-tick loss window', () => {

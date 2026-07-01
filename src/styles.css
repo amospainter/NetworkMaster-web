@@ -540,35 +540,8 @@ nav > div {
 .device.offline > span {
   border-color: var(--red);
 }
-.device > span > * {
-  grid-area: 1 / 1;
-}
-.icon-primary {
-  animation: blink-primary 1.6s steps(1, end) infinite;
-}
-.icon-unplugged {
+.device.offline > span .icon-unplugged {
   color: var(--red);
-  animation: blink-unplugged 1.6s steps(1, end) infinite;
-}
-@keyframes blink-primary {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0;
-  }
-}
-@keyframes blink-unplugged {
-  0%,
-  49% {
-    opacity: 0;
-  }
-  50%,
-  100% {
-    opacity: 1;
-  }
 }
 .device b {
   font: 600 10px DM Mono;

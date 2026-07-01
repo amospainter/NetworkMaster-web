@@ -30,6 +30,7 @@ Run `npm run check` before considering any change complete.
 | `src/styles.css`       | Main responsive visual system                                                                        |
 | `src/interaction.css`  | Cable hit targets, dragging, Wi-Fi zones, and upgrade-control styles                                 |
 | `PARITY.md`            | Implemented and remaining native gameplay parity                                                     |
+| `HOWTOPLAY.md`         | Full player-facing rules reference; the in-app Help modal is a condensed, tabbed version of it       |
 | `eslint.config.js`     | Vue and TypeScript lint rules                                                                        |
 
 ## Architecture
@@ -54,9 +55,9 @@ Coordinates are stored as percentages so one topology works across iPad and desk
 - High score key: `networkmaster.best.v1`
 - Personal leaderboard key: `networkmaster.leaderboard.v1` — a flat, unversioned `LeaderboardEntry[]` (id, scenario, score, delivered, tick, completedAt), capped at the 10 highest scores, managed entirely in `App.vue` (not part of `GameState`). `recordLeaderboardEntry` appends once per run on the `phase` transition into `'gameover'`.
 - Tutorial-seen flag: `networkmaster.tutorial-seen.v1` — presence (any value) suppresses the onboarding card on future visits.
-- Current `GameState.version`: `7`
+- Current `GameState.version`: `8`
 
-Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, version 5 runs (which predate `Cable.style`) to version 6, and version 6 runs (which predate latency/queue-delay telemetry) to version 7; `App.vue`'s loader delegates to it.
+Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, version 5 runs (which predate `Cable.style`) to version 6, version 6 runs (which predate latency/queue-delay telemetry) to version 7, and version 7 runs (whose `events` were plain strings) to version 8 by stamping each with the save's current tick; `App.vue`'s loader delegates to it.
 
 ## Gameplay invariants
 
@@ -79,7 +80,9 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - Cables carry a `style` of `'rightAngle'` (routed by `computeCableRoutes`'s obstacle-avoiding lane planner) or `'diagonal'` (drawn as a direct line between endpoints, skipping the orthogonal scoring and occupancy tracking entirely).
 - `rerouteCable` moves one end of an existing cable to a new device, re-running the same validation as `addCable` (no end-device-to-end-device links, no wireless-only endpoints, Cloud Edge only via router, no duplicate links, target port limit) while preserving the cable's tier, VLAN, style, and upgrade spend.
 - A wireless-capable client connects to the least-loaded in-range access point (`wirelessClientLoad`, a count of `WIRELESS_CAPABLE_KINDS` devices in that hub's coverage circle), breaking ties by nearest distance — not simply the nearest hub.
+- Wireless access points have exactly one port (`DEVICE_RULES.wireless.ports`) — they only ever need a single uplink cable — and, like router/switch, get an independent `upgradeDeviceSpeed` throughput upgrade (`FORWARDING_SPEED_COSTS`/`FORWARDING_SPEED_GAIN`, keyed by kind) on top of the Wi-Fi generation upgrade. `upgradeWifi` applies only the generation's pps _delta_, not an overwrite, so a prior speed-upgrade bonus survives a later generation upgrade.
 - `GameState.recentLatencyTicks`/`recentQueueDelayTicks` are rolling averages (75% history / 25% latest, matching the native HUD weighting) updated per delivered packet: latency is `tick - generatedTick`, queue delay is the packet's accumulated `queuedTicks`.
+- `GameState.events` is `GameEvent[]` (`{ tick, text }`), not `string[]` — always add entries through `addEvent(state, text)` (mutating) or `event(state, text)` (for the `{...state, events: [...]}` rejection-path literal pattern), never `state.events.unshift(text)` directly. Each entry is stamped with the tick it happened on so the HUD can display the real elapsed time instead of deriving a countdown from list position (which used to keep incrementing even while the visible text was unchanged, since most ticks produce no event).
 
 ## Canvas, tutorial, and advisor (App.vue)
 
@@ -87,6 +90,9 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - The minimap is a static read-only overview SVG (devices as dots, cables as lines, using the same 0–100 coordinate space) — it does not track or respond to the current pan/zoom viewport.
 - `advisorTip` is a computed, prioritized one-liner ("Jackie") reading live game state (failure pressure, congestion, out-of-range devices, budget, queue delay, combo) — pure presentation, not persisted or part of `GameState`.
 - The tutorial is a 5-step onboarding card shown once per browser (gated by `TUTORIAL_SEEN_KEY`), entirely client-side UI state (`tutorialStep`/`tutorialActive`), not tied to `GameState`.
+- Cable labels sit at `pointAlongRoute(route.points, 0.5)` — the actual routed midpoint, not the geometric midpoint of the endpoints — so the label follows orthogonal bends correctly. Each shows the cable's tier/speed (always neutral `--ink`) above its live `load/capacity` traffic figure, which is colored by the same `active`/`congested`/`failed` status class as the link itself.
+- Device throughput bars (canvas + inspector) compare `deviceThroughputUsed` (sum of load on a device's attached cables) against `deviceCapacity` (exported from `game.ts`; `hubPps` for wireless, `pps` otherwise) — this is a display-only approximation of admitted traffic, not the exact per-tick admission count from `simulate`.
+- An offline device (`Device.offline`) blinks between its normal icon and an `Unplug` icon. This is Vue-data-driven, not CSS-animation-driven: a single `offlineBlinkOn` ref flips every 800ms (one `setInterval` for the whole app), and each device's icon is `v-if="!d.offline || offlineBlinkOn"` vs. `v-else` `<Unplug>` — an online device's condition is always true regardless of the shared flag, so only offline devices ever toggle. (An earlier CSS-`animation`-based version was replaced after a bug where all devices appeared to blink.)
 
 ## Code standards
 
@@ -98,6 +104,7 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - Use `import type` for type-only imports.
 - Add a Vitest regression test for every gameplay or persistence bug fix.
 - Preserve touch targets: device dragging uses pointer events and cables have an invisible 28 px hit path.
+- When a change touches a number or rule a player would notice (costs, capacities, thresholds, upgrade effects), update `HOWTOPLAY.md` and the in-app Help modal (`App.vue`, `modal === 'help'`) in the same change.
 
 ## UI constraints
 

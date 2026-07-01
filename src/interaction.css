@@ -37,6 +37,41 @@
   opacity: 0.85;
 }
 
+.cable-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font: 8px DM Mono;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  z-index: 2;
+}
+.cable-label b {
+  font-weight: 700;
+  color: var(--ink);
+}
+.cable-label.active {
+  color: #22bd83;
+  border-color: #22bd8399;
+}
+.cable-label.congested {
+  color: #f3a43b;
+  border-color: #f3a43b99;
+  font-weight: 700;
+}
+.cable-label.failed {
+  color: var(--red);
+  border-color: #e6534699;
+}
+
 .device {
   touch-action: none;
   user-select: none;
@@ -144,6 +179,24 @@
 .upgrade-list strong {
   font-family: 'DM Mono', monospace;
   color: #15978d;
+}
+
+.help-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 18px 0 4px;
+}
+
+.help-tabs button {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font: 10px DM Mono;
+}
+
+.help-tabs button:hover {
+  border-color: #15978d;
 }
 
 @media (max-width: 600px) {

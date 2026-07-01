@@ -212,7 +212,7 @@ const DEVICE_RULES: Record<
   tablet: { ports: 0, pps: 999, priority: 'stream', rate: 2 },
   server: { ports: 2, pps: 999, priority: 'bulk', rate: 0 },
   firewall: { ports: 4, pps: 12, priority: 'bulk', rate: 0 },
-  wireless: { ports: 6, pps: 4, priority: 'bulk', rate: 0 },
+  wireless: { ports: 1, pps: 4, priority: 'bulk', rate: 0 },
 }
 /** Creates a device with the native game's default port and throughput rules. */
 const createDevice = (
@@ -1309,28 +1309,43 @@ export function upgradeDevicePorts(state: GameState, deviceId: string): GameStat
   addEvent(s, `${d.label} expanded by 2 ports.`)
   return s
 }
-/** Raises forwarding throughput for a router or switch. */
+export const FORWARDING_SPEED_COSTS: Partial<Record<DeviceKind, number>> = {
+  router: 90,
+  switch: 60,
+  wireless: 50,
+}
+const FORWARDING_SPEED_GAIN: Partial<Record<DeviceKind, number>> = {
+  router: 8,
+  switch: 4,
+  wireless: 2,
+}
+/** Raises forwarding throughput for a router, switch, or wireless access point. */
 export function upgradeDeviceSpeed(state: GameState, deviceId: string): GameState {
   const s = cloneState(state),
     d = s.devices.find((x) => x.id === deviceId)
-  if (!d || !['router', 'switch'].includes(d.kind)) return state
-  const upgradeCost = d.kind === 'router' ? 90 : 60
+  if (!d || !(d.kind in FORWARDING_SPEED_COSTS)) return state
+  const upgradeCost = FORWARDING_SPEED_COSTS[d.kind]!
   if (s.budget < upgradeCost) return state
-  d.pps += d.kind === 'router' ? 8 : 4
+  d.pps += FORWARDING_SPEED_GAIN[d.kind]!
   d.upgradeSpend += upgradeCost
   s.budget -= upgradeCost
   addEvent(s, `${d.label} forwarding capacity upgraded.`)
   return s
 }
-/** Advances an access point to the next Wi-Fi generation. */
+/**
+ * Advances an access point to the next Wi-Fi generation. Applies only the
+ * generation's pps delta (not an overwrite) so an access point's independent
+ * `upgradeDeviceSpeed` throughput bonus survives a later generation upgrade.
+ */
 export function upgradeWifi(state: GameState, deviceId: string): GameState {
   const s = cloneState(state),
     d = s.devices.find((x) => x.id === deviceId)
   if (!d || d.kind !== 'wireless' || d.wifiLevel >= WIFI_STANDARDS.length - 1) return state
   const cost = WIFI_STANDARDS[d.wifiLevel].cost
   if (s.budget < cost) return state
+  const previousBasePps = WIFI_STANDARDS[d.wifiLevel].pps
   d.wifiLevel++
-  d.pps = WIFI_STANDARDS[d.wifiLevel].pps
+  d.pps += WIFI_STANDARDS[d.wifiLevel].pps - previousBasePps
   d.upgradeSpend += cost
   s.budget -= cost
   addEvent(s, `${d.label} upgraded to ${WIFI_STANDARDS[d.wifiLevel].name}.`)

@@ -20,7 +20,7 @@ This web port uses the Swift game and architecture documents in `../NetworkMaste
 - Equipment removal with attached-cable cleanup and 90% build/upgrade salvage
 - Cable VLAN tags and configurable PC/TV/console firewall block rules
 - Native 15% site-upgrade discount and bulk switch-throughput upgrade
-- Site cable upgrade with a 100 Mbps / 1 Gbps target picker (`upgradeAllCables`), matching every intervening tier's cost per cable and excluding the fixed-tier cloud uplink
+- Site cable upgrade with a target picker for every tier from Fast Ethernet through 100 Gigabit (`upgradeAllCables`), matching every intervening tier's cost per cable and excluding the fixed-tier cloud uplink
 - Per-scenario warm-up demand easing (`warmupFloor`/`warmupTicks`)
 - Challenge-event roster: traffic spike, budget bonus, device surge, and equipment-failure event
 - Delivery-count milestone budget awards
@@ -36,11 +36,18 @@ This web port uses the Swift game and architecture documents in `../NetworkMaste
 - "Jackie" advisor: a single contextual tip prioritized by network state (failure pressure, congestion, out-of-range devices, low budget, queue delay, combo streak)
 - Minimap: a static read-only topology overview in the canvas corner
 - Zoom/pan canvas: wheel-to-zoom and drag-to-pan over the topology, plus zoom in/out/reset controls
+- Live-throughput cable labels: every connection shows its current `load/capacity` at its midpoint, colored by link status
+- Per-device throughput bars: router/switch/wireless/firewall show a load-vs-capacity fill both on the canvas and in the inspector
+- Offline devices blink between their normal icon and an unplugged-cable icon, with a red-tinted border, on the canvas and minimap
+- Timestamped live-events feed (`GameEvent.tick`): each entry shows the tick it actually happened on instead of a position-derived countdown that kept moving even when the visible text hadn't changed
+- Access points get an independent forwarding-speed upgrade (`upgradeDeviceSpeed`, same button as router/switch), stacking on top of the Wi-Fi generation upgrade's own throughput jump rather than being overwritten by it
+- Cable labels show tier/speed (e.g. "Gigabit") in addition to live traffic (`load/capacity`)
 
 ## Remaining native-only systems
 
 - Seeded deterministic replay (the web port's RNG calls are not seed-driven the way native's are, so runs are not bit-for-bit reproducible)
 - Audio/haptics and accessibility custom actions (no Web Audio/haptic feedback layer or VoiceOver-equivalent custom actions are implemented)
+- Inbound/download traffic: the native sim spawns a return "download" packet from the router back to the source after every delivered upload (`isInbound`); this port only simulates the one-way upload leg (source → cloud/destination) and scores on that arrival. There's no round-trip packet, so cable load figures reflect upload traffic only.
 
 The remaining items require additional simulation state or browser-specific interaction work; the current port prioritizes the core endless topology/capacity/failure loop.
 
@@ -48,3 +55,4 @@ The remaining items require additional simulation state or browser-specific inte
 
 - **Load-aware AP balancing**: the native client only picks the nearest in-range hub for routing (no load awareness); this port's load-aware balancing is an enhancement beyond strict parity, since "balancing" was listed as a planned native-only system but the reference implementation does not actually do it.
 - **All end devices are Wi-Fi capable**: natively only phones/tablets (`isWirelessOnly`) can use Wi-Fi; PCs, TVs, and consoles are wired-only. This port additionally lets PC/TV/console join an access point's coverage circle (`WIRELESS_CAPABLE_KINDS` in `game.ts`) as an alternative or redundant backup to a cable — phones/tablets remain Wi-Fi _only_ (still cannot take cables), but every end-user device can now use Wi-Fi.
+- **Wireless access points have a single port**: native's `wirelessHub` allows up to 6 wired ports (`basePortLimit`); this port caps access points at 1, since they only ever need one uplink cable back into the topology.

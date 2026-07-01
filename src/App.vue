@@ -38,6 +38,7 @@ import {
   deleteCable,
   deviceCapacity,
   deviceRemovalRefund,
+  FORWARDING_SPEED_COSTS,
   hubRange,
   independentPathCount,
   migrateSavedGame,
@@ -61,7 +62,7 @@ import {
   wifiInfo,
   WIRELESS_CAPABLE_KINDS,
 } from './game'
-import type { Device, DeviceKind, GameState, LeaderboardEntry } from './types'
+import type { CableTier, Device, DeviceKind, GameState, LeaderboardEntry } from './types'
 
 const ACTIVE_RUN_STORAGE_KEY = 'networkmaster.active-run.v1'
 const HIGH_SCORE_STORAGE_KEY = 'networkmaster.best.v1'
@@ -89,6 +90,17 @@ const BUILD_OPTIONS: [DeviceKind, string, number][] = [
   ['firewall', 'Firewall', 110],
   ['server', 'Server', 120],
 ]
+/** Friendly speed labels for the site cable-upgrade picker, keyed by cable tier. */
+const TIER_SPEED_LABEL: Record<CableTier, string> = {
+  Copper: '10 Mbps',
+  'Fast Ethernet': '100 Mbps',
+  Gigabit: '1 Gbps',
+  '5 Gigabit': '5 Gbps',
+  '10 Gigabit': '10 Gbps',
+  '25 Gigabit': '25 Gbps',
+  '50 Gigabit': '50 Gbps',
+  '100 Gigabit': '100 Gbps',
+}
 /** Loads only the current save schema; incompatible prototypes start cleanly. */
 const loadSavedGame = () => {
   try {
@@ -117,6 +129,8 @@ const cableStyle = ref<'rightAngle' | 'diagonal'>('rightAngle')
 /** Set while rerouting an existing cable's endpoint; cleared once a target device is chosen. */
 const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(null)
 const modal = ref<'help' | 'stats' | 'upgrades' | 'leaderboard' | null>(null)
+const HELP_SECTIONS = ['Basics', 'Devices & Wi-Fi', 'Scoring & economy', 'Survival'] as const
+const helpSection = ref<(typeof HELP_SECTIONS)[number]>('Basics')
 const dark = ref(true)
 const chosen = ref('home')
 const best = ref(Number(localStorage.getItem(HIGH_SCORE_STORAGE_KEY) || 0))
@@ -298,16 +312,24 @@ watch(
     recordLeaderboardEntry(game.value)
   },
 )
+/** Drives the offline-device icon swap; data-driven so only `.offline` devices ever toggle. */
+const offlineBlinkOn = ref(true)
+let offlineBlinkTimer: number | undefined
+
 onMounted(() => {
   const updateAnimationClock = (timestamp: number) => {
     animationTime.value = timestamp
     animationFrame = requestAnimationFrame(updateAnimationClock)
   }
   animationFrame = requestAnimationFrame(updateAnimationClock)
+  offlineBlinkTimer = window.setInterval(() => {
+    offlineBlinkOn.value = !offlineBlinkOn.value
+  }, 800)
 })
 
 onBeforeUnmount(() => {
   clearInterval(simulationTimer)
+  clearInterval(offlineBlinkTimer)
   if (animationFrame !== undefined) cancelAnimationFrame(animationFrame)
 })
 
@@ -423,6 +445,13 @@ function continueUnscored() {
 function cablePath(cableId: string): string {
   const route = cableRoutes.value.get(cableId)
   return route ? routeToSvgPath(route) : ''
+}
+
+/** Canvas position at the midpoint of a cable's routed path, for its bandwidth label. */
+function cableLabelPos(cableId: string): { x: number; y: number } {
+  const route = cableRoutes.value.get(cableId)
+  if (!route) return { x: 0, y: 0 }
+  return pointAlongRoute(route.points, 0.5)
 }
 
 /** Smoothly advances the visual half-hop between discrete simulation ticks. */
@@ -630,6 +659,16 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               />
             </svg>
             <div
+              v-for="c in game.cables"
+              :key="'bandwidth-' + c.id"
+              class="cable-label"
+              :class="c.status"
+              :style="{ left: cableLabelPos(c.id).x + '%', top: cableLabelPos(c.id).y + '%' }"
+            >
+              <b>{{ c.tier }}</b
+              ><span>{{ c.load }}/{{ c.capacity }} pkt</span>
+            </div>
+            <div
               v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
               :key="'zone-' + hub.id"
               class="wifi-zone"
@@ -663,8 +702,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               @click.prevent
             >
               <span
-                ><component :is="deviceIcons[d.kind]" class="icon-primary" /><Unplug
-                  v-if="d.offline"
+                ><component :is="deviceIcons[d.kind]" v-if="!d.offline || offlineBlinkOn" /><Unplug
+                  v-else
                   class="icon-unplugged"
               /></span>
               <b>{{ d.label }}</b
@@ -841,13 +880,16 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               <button @click="setGame(upgradeDevicePorts(game!, picked!.id))">
                 +2 Ports <b>$50</b></button
               ><button @click="setGame(upgradeDeviceSpeed(game!, picked!.id))">
-                Faster forwarding <b>${{ picked.kind === 'router' ? 90 : 60 }}</b>
+                Faster forwarding <b>${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b>
               </button>
             </div>
             <div v-if="picked.kind === 'wireless'" class="device-upgrades">
               <button @click="setGame(upgradeWifi(game!, picked!.id))">
                 Upgrade Wi-Fi
                 <b>{{ wifiInfo(picked)!.cost >= 999 ? 'MAX' : '$' + wifiInfo(picked)!.cost }}</b>
+              </button>
+              <button @click="setGame(upgradeDeviceSpeed(game!, picked!.id))">
+                Faster forwarding <b>${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b>
               </button>
             </div>
             <button
@@ -987,40 +1029,139 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
       <div class="modal">
         <button class="close" @click="modal = null"><X /></button
         ><template v-if="modal === 'help'"
-          ><p class="overline">QUICK START</p>
+          ><p class="overline">HOW TO PLAY</p>
           <h1>Route every packet.</h1>
-          <ol>
-            <li>Select equipment and choose <b>Begin cable</b>, then tap its destination.</li>
-            <li>Phones and tablets require Wi-Fi coverage; they cannot use Ethernet.</li>
-            <li>Orange links exceed capacity. Upgrade or create another path.</li>
-            <li>Clean ticks build a score combo; redundant routes add bonus points.</li>
-            <li>Failure occurs after more than 30 drops across a rolling 20-tick window.</li>
-          </ol></template
+          <div class="help-tabs">
+            <button
+              v-for="section in HELP_SECTIONS"
+              :key="section"
+              :class="{ primary: helpSection === section }"
+              @click="helpSection = section"
+            >
+              {{ section }}
+            </button>
+          </div>
+          <div v-if="helpSection === 'Basics'">
+            <ol>
+              <li>Select equipment and choose <b>Begin cable</b>, then tap its destination.</li>
+              <li>
+                Toggle <b>Style</b> (Right-angle / Diagonal) before choosing a destination if the
+                auto-router gets crowded.
+              </li>
+              <li>
+                Select an existing cable and use <b>Reroute start/end</b> to move an endpoint
+                without losing its tier, VLAN, or upgrades.
+              </li>
+              <li>Drag any device to reposition it — useful for shifting Wi-Fi coverage.</li>
+              <li>Pan by dragging empty canvas; zoom with the scroll wheel or the +/− buttons.</li>
+              <li>
+                Only the <b>router</b> may connect to the Cloud Edge, and two end devices can never
+                link directly — equipment must sit between them.
+              </li>
+            </ol>
+          </div>
+          <div v-else-if="helpSection === 'Devices & Wi-Fi'">
+            <ol>
+              <li>
+                Phones and tablets are <b>Wi-Fi only</b>. PCs, TVs, and consoles keep a wired port
+                but can also join Wi-Fi coverage as a backup route.
+              </li>
+              <li>
+                A client in range of two overlapping access points prefers whichever has fewer
+                clients right now, not just the nearest one.
+              </li>
+              <li>
+                Access points have one wired uplink port, plus two independent upgrades: Wi-Fi
+                generation (range + base speed) and Faster forwarding (+2 pkt/tick, stacks on top).
+              </li>
+              <li>
+                Forwarding devices admit realtime traffic first, then stream, then bulk — a
+                congested router drops bulk packets before it touches a phone's.
+              </li>
+              <li>
+                Wi-Fi interference can randomly cut an access point's range and speed for 8–18
+                ticks; it clears on its own.
+              </li>
+              <li>
+                Equipment can wear down and fail outright in harder scenarios — an offline device
+                blinks on the canvas. Field repair ($40) restores health but not wear.
+              </li>
+            </ol>
+          </div>
+          <div v-else-if="helpSection === 'Scoring & economy'">
+            <ol>
+              <li>
+                Delivering a packet scores <b>10 × score multiplier × combo</b>; the multiplier
+                rises every 90 ticks.
+              </li>
+              <li>
+                5 clean ticks in a row (no drops) raises your combo up to 5×; 3+ drops in one tick
+                resets it.
+              </li>
+              <li>
+                A delivery with a genuine second independent route to its destination scores +5
+                bonus — redundancy pays.
+              </li>
+              <li>
+                Delivery milestones and a game-over network-health bonus (surviving devices ×
+                lifetime delivery ratio) add extra score/budget on top.
+              </li>
+              <li>
+                Removing equipment or a cable refunds 90% of what you spent on it, including
+                upgrades.
+              </li>
+              <li>
+                <b>Site Upgrades</b> (top bar) bulk-upgrade cable tiers, ports, or throughput across
+                the whole network for 15% less than one at a time.
+              </li>
+            </ol>
+          </div>
+          <div v-else>
+            <ol>
+              <li>
+                Orange links are over capacity — upgrade the cable or add a parallel route before it
+                fails.
+              </li>
+              <li>
+                Failure pressure is the share of packets dropped across the last 20 ticks; the run
+                ends once it's sustained above 30 drops past the scenario's early grace period.
+              </li>
+              <li>
+                Challenge events roll periodically: traffic spikes, budget bonuses, device surges,
+                and — in harder scenarios — outright equipment failure.
+              </li>
+              <li>
+                At game over you can <b>Try again</b> or <b>Continue unscored</b> to keep playing
+                without further leaderboard scoring.
+              </li>
+              <li>
+                Watch <b>Jackie</b> (bottom of the canvas) — it always surfaces the single most
+                urgent thing to fix right now.
+              </li>
+              <li>Every completed run is saved to your local Leaderboard, win or lose.</li>
+            </ol>
+          </div></template
         ><template v-else-if="modal === 'upgrades'"
           ><p class="overline">SITE UPGRADES</p>
           <h1>Upgrade the whole network.</h1>
           <p>Bulk upgrades cost less per component and apply instantly.</p>
           <div class="upgrade-list">
-            <button @click="setGame(upgradeAllCables(game!, 'Fast Ethernet'))">
+            <button
+              v-for="tier in CABLE_TIERS.slice(1)"
+              :key="'site-cable-' + tier.name"
+              @click="setGame(upgradeAllCables(game!, tier.name))"
+            >
               <span
-                ><CableIcon /><b>Fast Ethernet rollout</b
+                ><CableIcon /><b>{{ tier.name }} rollout</b
                 ><small>
-                  {{ siteCableUpgradeTargets(game!, 'Fast Ethernet').length }} link(s) below 100
-                  Mbps</small
+                  {{ siteCableUpgradeTargets(game!, tier.name).length }} link(s) below
+                  {{ TIER_SPEED_LABEL[tier.name] }}</small
                 ></span
               ><strong
-                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, 'Fast Ethernet')) }}</strong
-              ></button
-            ><button @click="setGame(upgradeAllCables(game!, 'Gigabit'))">
-              <span
-                ><CableIcon /><b>Gigabit rollout</b
-                ><small>
-                  {{ siteCableUpgradeTargets(game!, 'Gigabit').length }} link(s) below 1 Gbps</small
-                ></span
-              ><strong
-                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, 'Gigabit')) }}</strong
-              ></button
-            ><button @click="setGame(upgradeAllPorts(game!))">
+                >${{ siteDiscountedCost(siteCableUpgradeFullCost(game!, tier.name)) }}</strong
+              >
+            </button>
+            <button @click="setGame(upgradeAllPorts(game!))">
               <span
                 ><Network /><b>Port expansion</b
                 ><small>Add 2 ports to every router and switch</small></span
