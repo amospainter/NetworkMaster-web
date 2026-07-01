@@ -52,9 +52,11 @@ Coordinates are stored as percentages so one topology works across iPad and desk
 
 - Active run key: `networkmaster.active-run.v1`
 - High score key: `networkmaster.best.v1`
-- Current `GameState.version`: `6`
+- Personal leaderboard key: `networkmaster.leaderboard.v1` — a flat, unversioned `LeaderboardEntry[]` (id, scenario, score, delivered, tick, completedAt), capped at the 10 highest scores, managed entirely in `App.vue` (not part of `GameState`). `recordLeaderboardEntry` appends once per run on the `phase` transition into `'gameover'`.
+- Tutorial-seen flag: `networkmaster.tutorial-seen.v1` — presence (any value) suppresses the onboarding card on future visits.
+- Current `GameState.version`: `7`
 
-Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, and version 5 runs (which predate `Cable.style`) to version 6; `App.vue`'s loader delegates to it.
+Only load saves matching the current schema. Increment `GameState.version` when persisted fields change incompatibly, update the loader, and add a persistence regression test if migration is introduced. `migrateSavedGame` in `game.ts` backfills version 2 runs (which predate `milestonesReached` and `activeEvents`) to version 3, version 3 runs (which predate the per-device `interference` field) to version 4, version 4 runs (which predate `Packet.queuedTicks`) to version 5 by discarding their transient in-flight packets, version 5 runs (which predate `Cable.style`) to version 6, and version 6 runs (which predate latency/queue-delay telemetry) to version 7; `App.vue`'s loader delegates to it.
 
 ## Gameplay invariants
 
@@ -77,6 +79,14 @@ Only load saves matching the current schema. Increment `GameState.version` when 
 - Cables carry a `style` of `'rightAngle'` (routed by `computeCableRoutes`'s obstacle-avoiding lane planner) or `'diagonal'` (drawn as a direct line between endpoints, skipping the orthogonal scoring and occupancy tracking entirely).
 - `rerouteCable` moves one end of an existing cable to a new device, re-running the same validation as `addCable` (no end-device-to-end-device links, no wireless-only endpoints, Cloud Edge only via router, no duplicate links, target port limit) while preserving the cable's tier, VLAN, style, and upgrade spend.
 - A wireless-capable client connects to the least-loaded in-range access point (`wirelessClientLoad`, a count of `WIRELESS_CAPABLE_KINDS` devices in that hub's coverage circle), breaking ties by nearest distance — not simply the nearest hub.
+- `GameState.recentLatencyTicks`/`recentQueueDelayTicks` are rolling averages (75% history / 25% latest, matching the native HUD weighting) updated per delivered packet: latency is `tick - generatedTick`, queue delay is the packet's accumulated `queuedTicks`.
+
+## Canvas, tutorial, and advisor (App.vue)
+
+- The canvas wraps its routed SVG, Wi-Fi zones, devices, and packets in a `.canvas-stage` div transformed by `canvasTransform` (`translate(panX, panY) scale(zoom)`); device-percentage coordinates are unaffected since the transform applies to the whole layer. Wheel zoom and pointer drag-to-pan live on the outer `.canvas`; `startDeviceDrag` calls `event.stopPropagation()` so dragging a device doesn't also pan the background. Zoom clamps to `[ZOOM_MIN, ZOOM_MAX]` (0.6–2.5); `resetView` zeroes pan and zoom.
+- The minimap is a static read-only overview SVG (devices as dots, cables as lines, using the same 0–100 coordinate space) — it does not track or respond to the current pan/zoom viewport.
+- `advisorTip` is a computed, prioritized one-liner ("Jackie") reading live game state (failure pressure, congestion, out-of-range devices, budget, queue delay, combo) — pure presentation, not persisted or part of `GameState`.
+- The tutorial is a 5-step onboarding card shown once per browser (gated by `TUTORIAL_SEEN_KEY`), entirely client-side UI state (`tutorialStep`/`tutorialActive`), not tied to `GameState`.
 
 ## Code standards
 

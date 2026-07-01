@@ -6,6 +6,7 @@ import {
   CirclePause,
   CirclePlay,
   Cloud,
+  EthernetPort,
   Gamepad2,
   HelpCircle,
   Monitor,
@@ -21,6 +22,7 @@ import {
   Tablet,
   Trash2,
   Tv,
+  Unplug,
   Wifi,
   Wrench,
   X,
@@ -34,6 +36,7 @@ import {
   cycleCableVlan,
   cycleFirewallRule,
   deleteCable,
+  deviceCapacity,
   deviceRemovalRefund,
   hubRange,
   independentPathCount,
@@ -58,10 +61,13 @@ import {
   wifiInfo,
   WIRELESS_CAPABLE_KINDS,
 } from './game'
-import type { Device, DeviceKind, GameState } from './types'
+import type { Device, DeviceKind, GameState, LeaderboardEntry } from './types'
 
 const ACTIVE_RUN_STORAGE_KEY = 'networkmaster.active-run.v1'
 const HIGH_SCORE_STORAGE_KEY = 'networkmaster.best.v1'
+const LEADERBOARD_STORAGE_KEY = 'networkmaster.leaderboard.v1'
+const TUTORIAL_SEEN_KEY = 'networkmaster.tutorial-seen.v1'
+const LEADERBOARD_SIZE = 10
 
 const deviceIcons = {
   cloud: Cloud,
@@ -94,6 +100,15 @@ const loadSavedGame = () => {
     return null
   }
 }
+/** Loads the personal leaderboard; malformed or missing storage starts empty. */
+const loadLeaderboard = (): LeaderboardEntry[] => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LEADERBOARD_STORAGE_KEY) || '[]')
+    return Array.isArray(stored) ? stored : []
+  } catch {
+    return []
+  }
+}
 const screen = ref<'menu' | 'game'>('menu')
 const game = ref<GameState | null>(loadSavedGame())
 const selected = ref<string | null>(null)
@@ -101,10 +116,11 @@ const cableStart = ref<string | null>(null)
 const cableStyle = ref<'rightAngle' | 'diagonal'>('rightAngle')
 /** Set while rerouting an existing cable's endpoint; cleared once a target device is chosen. */
 const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(null)
-const modal = ref<'help' | 'stats' | 'upgrades' | null>(null)
+const modal = ref<'help' | 'stats' | 'upgrades' | 'leaderboard' | null>(null)
 const dark = ref(true)
 const chosen = ref('home')
 const best = ref(Number(localStorage.getItem(HIGH_SCORE_STORAGE_KEY) || 0))
+const leaderboard = ref<LeaderboardEntry[]>(loadLeaderboard())
 const picked = computed(() => game.value?.devices.find((device) => device.id === selected.value))
 const pickedCable = computed(() =>
   game.value?.cables.find((networkCable) => networkCable.id === selected.value),
@@ -134,6 +150,110 @@ function queueDepth(deviceId: string): number {
   return game.value.packets.filter((p) => p.queuedTicks > 0 && p.path[p.hop + 1] === deviceId)
     .length
 }
+
+const THROUGHPUT_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
+
+/** Current packets-per-tick flowing over a forwarding device's attached cables. */
+function deviceThroughputUsed(device: Device): number {
+  if (!game.value) return 0
+  return game.value.cables
+    .filter((c) => c.from === device.id || c.to === device.id)
+    .reduce((total, c) => total + c.load, 0)
+}
+
+/** Throughput fill ratio (0-1, can exceed 1 when over capacity) for the canvas/inspector bar. */
+function throughputRatio(device: Device): number {
+  return deviceThroughputUsed(device) / deviceCapacity(device)
+}
+
+const ZOOM_MIN = 0.6
+const ZOOM_MAX = 2.5
+const zoom = ref(1)
+const panX = ref(0)
+const panY = ref(0)
+const canvasTransform = computed(
+  () => `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+)
+let activePan: { startX: number; startY: number; originX: number; originY: number } | null = null
+
+/** Starts a background drag-to-pan; ignored while drawing/rerouting a cable. */
+function startCanvasPan(event: PointerEvent) {
+  if (cableStart.value || reroutingCable.value) return
+  activePan = {
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: panX.value,
+    originY: panY.value,
+  }
+  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+}
+function moveCanvasPan(event: PointerEvent) {
+  if (!activePan) return
+  panX.value = activePan.originX + (event.clientX - activePan.startX)
+  panY.value = activePan.originY + (event.clientY - activePan.startY)
+}
+function endCanvasPan() {
+  activePan = null
+}
+function zoomBy(delta: number) {
+  zoom.value = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom.value + delta))
+}
+/** Wheel-to-zoom, centered visually since the stage transform scales from its center. */
+function handleCanvasWheel(event: WheelEvent) {
+  event.preventDefault()
+  zoomBy(event.deltaY > 0 ? -0.15 : 0.15)
+}
+function resetView() {
+  zoom.value = 1
+  panX.value = 0
+  panY.value = 0
+}
+
+const TUTORIAL_STEPS = [
+  'Pick a scenario and start a run — every network begins on a clean slate.',
+  'Select a device, choose "Begin cable", then tap its destination to wire them together.',
+  'Phones and tablets only join through Wi-Fi coverage; other end devices can use either a cable or Wi-Fi.',
+  'Watch the canvas: packets animate along your cables. Orange links are over capacity — upgrade the link or add another route.',
+  'Open Site Upgrades for discounted bulk upgrades, and check Run Stats for live delivery telemetry.',
+]
+const tutorialStep = ref(0)
+const tutorialActive = ref(localStorage.getItem(TUTORIAL_SEEN_KEY) === null)
+function dismissTutorial() {
+  tutorialActive.value = false
+  localStorage.setItem(TUTORIAL_SEEN_KEY, '1')
+}
+function advanceTutorial() {
+  if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
+    dismissTutorial()
+    return
+  }
+  tutorialStep.value++
+}
+
+/** A single contextual tip from "Jackie", the in-game advisor, prioritized by urgency. */
+const advisorTip = computed(() => {
+  const currentGame = game.value
+  if (!currentGame) return ''
+  if (currentGame.failure > 50)
+    return 'Failure pressure is high — add capacity or reroute traffic before it tips over.'
+  if (currentGame.cables.some((c) => c.status === 'congested'))
+    return 'An orange link is over capacity. Upgrade it or build a parallel route to relieve it.'
+  if (
+    currentGame.devices.some(
+      (d) =>
+        WIRELESS_CAPABLE_KINDS.includes(d.kind) &&
+        d.ports === 0 &&
+        !servingWirelessHub(currentGame, d.id),
+    )
+  )
+    return 'A device has no signal — move it into Wi-Fi range or run a cable to it.'
+  if (currentGame.budget < 50)
+    return 'Budget is tight. Bulk site upgrades save 15% over upgrading equipment one at a time.'
+  if (currentGame.recentQueueDelayTicks > 2)
+    return 'Packets are queuing at a forwarding device — boost its throughput or add a path around it.'
+  if (currentGame.combo >= 3) return `Nice streak — a ${currentGame.combo}× combo is building.`
+  return 'Network looks steady. Keep an eye on capacity as traffic ramps up.'
+})
 
 let simulationTimer: number | undefined
 let animationFrame: number | undefined
@@ -170,6 +290,14 @@ watch(
   },
   { deep: true },
 )
+/** Appends a leaderboard entry exactly once, on the transition into game over. */
+watch(
+  () => game.value?.phase,
+  (phase, previousPhase) => {
+    if (phase !== 'gameover' || previousPhase === 'gameover' || !game.value) return
+    recordLeaderboardEntry(game.value)
+  },
+)
 onMounted(() => {
   const updateAnimationClock = (timestamp: number) => {
     animationTime.value = timestamp
@@ -188,9 +316,16 @@ function start(scenarioId: string) {
   game.value = newGame(scenarioId)
   screen.value = 'game'
   selected.value = null
+  canvasInteractionCount.value = 0
 }
+const CANVAS_HINT_ACTIONS = 4
+/** Counts canvas interactions so the idle "select a device" hint can fade out. */
+const canvasInteractionCount = ref(0)
+const canvasHintVisible = computed(() => canvasInteractionCount.value < CANVAS_HINT_ACTIONS)
+
 function selectDevice(device: Device) {
   if (!game.value) return
+  canvasInteractionCount.value++
   if (reroutingCable.value) {
     game.value = rerouteCable(
       game.value,
@@ -227,6 +362,12 @@ function closeInspector() {
 function setGame(next: GameState) {
   game.value = next
 }
+/** Places a build-panel device and counts it as a canvas interaction. */
+function placeDevice(kind: DeviceKind) {
+  if (!game.value) return
+  canvasInteractionCount.value++
+  game.value = buildDevice(game.value, kind)
+}
 
 /** Removes the selected cable and closes its inspector. */
 function deleteSelectedCable() {
@@ -245,6 +386,30 @@ function removeSelectedDevice() {
 }
 
 const siteDiscountedCost = (fullPrice: number) => Math.floor(fullPrice * 0.85)
+
+/** Creates an entry id in modern browsers and a non-secure-context fallback elsewhere. */
+const createEntryId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+/** Appends a finished run to the local leaderboard, keeping the top scores. */
+function recordLeaderboardEntry(finishedGame: GameState) {
+  leaderboard.value = [
+    ...leaderboard.value,
+    {
+      id: createEntryId(),
+      scenario: finishedGame.scenario,
+      score: finishedGame.score,
+      delivered: finishedGame.delivered,
+      tick: finishedGame.tick,
+      completedAt: Date.now(),
+    },
+  ]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, LEADERBOARD_SIZE)
+  localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(leaderboard.value))
+}
 
 /** Resumes a failed topology without allowing additional leaderboard scoring. */
 function continueUnscored() {
@@ -295,6 +460,7 @@ function packetPos(path: string[], hop: number, progress: number) {
 let activeDrag: { id: string; startX: number; startY: number; moved: boolean } | null = null
 function startDeviceDrag(event: PointerEvent, device: Device) {
   if (cableStart.value) return
+  event.stopPropagation() // don't also start a background canvas pan
   activeDrag = { id: device.id, startX: event.clientX, startY: event.clientY, moved: false }
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
 }
@@ -319,6 +485,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
   activeDrag = null
   if (moved) {
     event.preventDefault()
+    canvasInteractionCount.value++
     selected.value = device.id
   } else selectDevice(device)
 }
@@ -348,7 +515,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           ><button v-if="game" @click="screen = 'game'">Continue · score {{ game.score }}</button>
         </div>
         <div class="best">
-          <span>PERSONAL BEST</span><b>{{ best.toLocaleString() }}</b>
+          <span>PERSONAL BEST</span><b>{{ best.toLocaleString() }}</b
+          ><button @click="modal = 'leaderboard'">Leaderboard</button>
         </div>
       </section>
       <section class="scenario-section">
@@ -430,83 +598,159 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             v-for="[kind, label, cost] in BUILD_OPTIONS"
             :key="kind"
             :disabled="game.budget < cost"
-            @click="setGame(buildDevice(game!, kind))"
+            @click="placeDevice(kind)"
           >
             <component :is="deviceIcons[kind]" /><span
               >{{ label }}<small>${{ cost }}</small></span
             >
           </button>
         </aside>
-        <div class="canvas">
-          <svg class="links" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <g v-for="c in game.cables" :key="c.id" @click="selected = c.id">
-              <path class="link-hit" :d="cablePath(c.id)" />
-              <path :class="[c.status, { selected: selected === c.id }]" :d="cablePath(c.id)" />
-            </g>
-            <line
-              v-for="connection in wirelessConnections"
-              :key="'wifi-link-' + connection.device.id"
-              class="wireless-link"
-              :x1="connection.device.x"
-              :y1="connection.device.y"
-              :x2="connection.hub!.x"
-              :y2="connection.hub!.y"
-            />
-          </svg>
-          <div
-            v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
-            :key="'zone-' + hub.id"
-            class="wifi-zone"
-            :class="{ interfered: hub.interference > 0 }"
-            :style="{
-              left: hub.x + '%',
-              top: hub.y + '%',
-              width: wifiZoneDiameter(hub) + '%',
-              height: wifiZoneDiameter(hub) + '%',
-            }"
-          >
-            <span>{{
-              hub.interference > 0
-                ? `${wifiInfo(hub)!.name} · INTERFERED (${hub.interference}t)`
-                : wifiInfo(hub)!.name
-            }}</span>
-          </div>
-          <button
-            v-for="d in game.devices"
-            :key="d.id"
-            class="device"
-            :class="[d.kind, { selected: selected === d.id, cabling: cableStart === d.id }]"
-            :style="{ left: d.x + '%', top: d.y + '%' }"
-            :aria-label="`${d.label}, ${d.kind}, ${d.ports} of ${d.maxPorts} ports`"
-            @pointerdown="startDeviceDrag($event, d)"
-            @pointermove="moveDraggedDevice"
-            @pointerup="finishDeviceDrag($event, d)"
-            @click.prevent
-          >
-            <span><component :is="deviceIcons[d.kind]" /></span><b>{{ d.label }}</b
-            ><small
-              v-if="WIRELESS_CAPABLE_KINDS.includes(d.kind) && d.ports === 0"
-              class="wifi-badge"
-              :class="{ 'out-of-range': !wirelessHubLabel(d.id) }"
+        <div
+          class="canvas"
+          @wheel="handleCanvasWheel"
+          @pointerdown="startCanvasPan"
+          @pointermove="moveCanvasPan"
+          @pointerup="endCanvasPan"
+          @pointercancel="endCanvasPan"
+        >
+          <div class="canvas-stage" :style="{ transform: canvasTransform }">
+            <svg class="links" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <g v-for="c in game.cables" :key="c.id" @pointerdown.stop @click="selected = c.id">
+                <path class="link-hit" :d="cablePath(c.id)" />
+                <path :class="[c.status, { selected: selected === c.id }]" :d="cablePath(c.id)" />
+              </g>
+              <line
+                v-for="connection in wirelessConnections"
+                :key="'wifi-link-' + connection.device.id"
+                class="wireless-link"
+                :x1="connection.device.x"
+                :y1="connection.device.y"
+                :x2="connection.hub!.x"
+                :y2="connection.hub!.y"
+              />
+            </svg>
+            <div
+              v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
+              :key="'zone-' + hub.id"
+              class="wifi-zone"
+              :class="{ interfered: hub.interference > 0 }"
+              :style="{
+                left: hub.x + '%',
+                top: hub.y + '%',
+                width: wifiZoneDiameter(hub) + '%',
+                height: wifiZoneDiameter(hub) + '%',
+              }"
             >
-              {{ wirelessHubLabel(d.id) ? 'WI-FI · ' + wirelessHubLabel(d.id) : 'OUT OF RANGE' }}
-            </small>
-            <small v-else-if="d.kind !== 'cloud'">{{ d.ports }}/{{ d.maxPorts }} PORTS</small>
-          </button>
-          <i
-            v-for="p in game.packets"
-            :key="p.id"
-            class="packet"
-            :class="p.priority"
-            :style="{
-              left: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).x + '%',
-              top: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).y + '%',
-            }"
-          />
-          <div class="canvas-note">
+              <span>{{
+                hub.interference > 0
+                  ? `${wifiInfo(hub)!.name} · INTERFERED (${hub.interference}t)`
+                  : wifiInfo(hub)!.name
+              }}</span>
+            </div>
+            <button
+              v-for="d in game.devices"
+              :key="d.id"
+              class="device"
+              :class="[
+                d.kind,
+                { selected: selected === d.id, cabling: cableStart === d.id, offline: d.offline },
+              ]"
+              :style="{ left: d.x + '%', top: d.y + '%' }"
+              :aria-label="`${d.label}, ${d.kind}, ${d.offline ? 'offline, ' : ''}${d.ports} of ${d.maxPorts} ports`"
+              @pointerdown="startDeviceDrag($event, d)"
+              @pointermove="moveDraggedDevice"
+              @pointerup="finishDeviceDrag($event, d)"
+              @click.prevent
+            >
+              <span
+                ><component :is="deviceIcons[d.kind]" class="icon-primary" /><Unplug
+                  v-if="d.offline"
+                  class="icon-unplugged"
+              /></span>
+              <b>{{ d.label }}</b
+              ><small
+                v-if="WIRELESS_CAPABLE_KINDS.includes(d.kind) && d.ports === 0"
+                class="wifi-badge"
+                :class="{ 'out-of-range': !wirelessHubLabel(d.id) }"
+              >
+                {{ wirelessHubLabel(d.id) ? 'WI-FI · ' + wirelessHubLabel(d.id) : 'OUT OF RANGE' }}
+              </small>
+              <small v-else-if="d.kind !== 'cloud'">{{ d.ports }}/{{ d.maxPorts }} PORTS</small>
+              <div
+                v-if="THROUGHPUT_KINDS.includes(d.kind)"
+                class="throughput-bar"
+                :class="{ over: throughputRatio(d) > 1 }"
+              >
+                <i :style="{ width: Math.min(100, throughputRatio(d) * 100) + '%' }" />
+              </div>
+            </button>
+            <i
+              v-for="p in game.packets"
+              :key="p.id"
+              class="packet"
+              :class="p.priority"
+              :style="{
+                left: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).x + '%',
+                top: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).y + '%',
+              }"
+            />
+          </div>
+          <div v-if="cableStart || canvasHintVisible" class="canvas-note">
             <CableIcon />{{
               cableStart ? 'Choose a destination device' : 'Select a device to inspect or connect'
             }}
+          </div>
+          <div class="advisor-tip"><EthernetPort />Jackie: {{ advisorTip }}</div>
+          <div class="minimap" @pointerdown.stop>
+            <div class="panel-title">
+              <span>Overview</span>
+              <div class="zoom-controls">
+                <button aria-label="Zoom in" @click="zoomBy(0.2)">+</button
+                ><button aria-label="Zoom out" @click="zoomBy(-0.2)">−</button
+                ><button aria-label="Reset view" @click="resetView">Reset</button>
+              </div>
+            </div>
+            <svg class="minimap-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <circle
+                v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
+                :key="'mini-zone-' + hub.id"
+                :cx="hub.x"
+                :cy="hub.y"
+                :r="hubRange(hub)"
+                class="minimap-wifi"
+                :class="{ interfered: hub.interference > 0 }"
+              />
+              <line
+                v-for="c in game.cables"
+                :key="'mini-' + c.id"
+                :x1="game.devices.find((d) => d.id === c.from)?.x"
+                :y1="game.devices.find((d) => d.id === c.from)?.y"
+                :x2="game.devices.find((d) => d.id === c.to)?.x"
+                :y2="game.devices.find((d) => d.id === c.to)?.y"
+              />
+              <rect
+                v-for="d in game.devices"
+                :key="'mini-' + d.id"
+                :x="d.x - 2.2"
+                :y="d.y - 2.2"
+                width="4.4"
+                height="4.4"
+                rx="1.2"
+                :class="{ offline: d.offline }"
+              />
+            </svg>
+          </div>
+          <div v-if="tutorialActive" class="tutorial-card" @pointerdown.stop>
+            <p class="overline">
+              QUICK START · STEP {{ tutorialStep + 1 }} / {{ TUTORIAL_STEPS.length }}
+            </p>
+            <p>{{ TUTORIAL_STEPS[tutorialStep] }}</p>
+            <div class="tutorial-actions">
+              <button @click="dismissTutorial">Skip</button
+              ><button class="primary" @click="advanceTutorial">
+                {{ tutorialStep >= TUTORIAL_STEPS.length - 1 ? 'Got it' : 'Next' }}
+              </button>
+            </div>
           </div>
         </div>
         <aside v-if="picked || pickedCable" class="inspector">
@@ -535,6 +779,20 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             <div class="stat">
               <span>Throughput</span
               ><b>{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick' }}</b>
+            </div>
+            <div v-if="THROUGHPUT_KINDS.includes(picked.kind)" class="pressure inspector-pressure">
+              <span
+                >Current load
+                <b
+                  >{{ deviceThroughputUsed(picked) }} / {{ deviceCapacity(picked) }} pkt/tick</b
+                ></span
+              >
+              <div>
+                <i
+                  :class="{ over: throughputRatio(picked) > 1 }"
+                  :style="{ width: Math.min(100, throughputRatio(picked) * 100) + '%' }"
+                />
+              </div>
             </div>
             <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
               <span>Delivered</span><b>{{ picked.delivered }} / {{ picked.generated }}</b>
@@ -687,8 +945,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         <div class="events">
           <div><Activity /> LIVE EVENTS</div>
           <p v-for="(e, i) in game.events.slice(0, 3)" :key="i">
-            <span>{{ String(Math.max(0, game.tick - i)).padStart(3, '0') }}</span
-            >{{ e }}
+            <span>{{ String(e.tick).padStart(3, '0') }}</span
+            >{{ e.text }}
           </p>
         </div>
         <div class="legend">
@@ -721,6 +979,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         </div>
         <button class="primary" @click="start(game.scenario)"><RotateCcw /> Try again</button
         ><button @click="continueUnscored">Continue unscored</button
+        ><button @click="modal = 'leaderboard'">Leaderboard</button
         ><button @click="screen = 'menu'">Main menu</button>
       </div>
     </div>
@@ -782,7 +1041,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               >
             </button>
           </div></template
-        ><template v-else
+        ><template v-else-if="modal === 'stats'"
           ><p class="overline">RUN TELEMETRY</p>
           <h1>{{ game?.delivered }} packets delivered</h1>
           <div class="stat">
@@ -801,7 +1060,33 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           </div>
           <div class="stat">
             <span>Traffic ramp</span><b>{{ game?.rate.toFixed(2) }}×</b>
-          </div></template
+          </div>
+          <div class="stat">
+            <span>Avg. delivery latency</span><b>{{ game?.recentLatencyTicks.toFixed(1) }} ticks</b>
+          </div>
+          <div class="stat">
+            <span>Avg. queue delay</span><b>{{ game?.recentQueueDelayTicks.toFixed(1) }} ticks</b>
+          </div>
+          <button class="wide" @click="modal = 'leaderboard'">View leaderboard</button></template
+        ><template v-else-if="modal === 'leaderboard'"
+          ><p class="overline">PERSONAL LEADERBOARD</p>
+          <h1>Top {{ LEADERBOARD_SIZE }} runs</h1>
+          <p v-if="!leaderboard.length" class="hint">
+            No completed runs yet. Finish a network to set your first score.
+          </p>
+          <ol v-else class="leaderboard-list">
+            <li v-for="(entry, i) in leaderboard" :key="entry.id">
+              <span class="rank">#{{ i + 1 }}</span>
+              <span class="leaderboard-meta">
+                <b>{{ entry.score.toLocaleString() }}</b>
+                <small
+                  >{{ SCENARIOS.find((s) => s.id === entry.scenario)?.name ?? entry.scenario }} ·
+                  {{ entry.delivered }} delivered · {{ entry.tick }} ticks ·
+                  {{ new Date(entry.completedAt).toLocaleDateString() }}</small
+                >
+              </span>
+            </li>
+          </ol></template
         >
       </div>
     </div>

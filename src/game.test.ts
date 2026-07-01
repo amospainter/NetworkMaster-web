@@ -26,7 +26,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(6)
+      expect(game.version).toBe(8)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -84,7 +84,7 @@ describe('NetworkMaster gameplay rules', () => {
     const router = game.devices.find((d) => d.kind === 'router')!
     const result = addCable(game, phone.id, router.id)
     expect(result.cables).toHaveLength(game.cables.length)
-    expect(result.events[0]).toContain('Wi-Fi')
+    expect(result.events[0].text).toContain('Wi-Fi')
   })
 
   it('recognizes a second independent route', () => {
@@ -177,12 +177,12 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.devices.some((device) => device.id === networkSwitch.id)).toBe(false)
     expect(game.cables.some((cable) => cable.id === attachedCable.id)).toBe(false)
     expect(game.budget).toBe(487) // $72 equipment + $45 cable salvage
-    expect(game.events[0]).toContain('$117 salvage')
+    expect(game.events[0].text).toContain('$117 salvage')
   })
 
-  it('initializes the version 6 schema with empty progression state', () => {
+  it('initializes the version 8 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(6)
+    expect(game.version).toBe(8)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
     expect(game.devices.every((device) => device.interference === 0)).toBe(true)
@@ -207,7 +207,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(6)
+    expect(migrated?.version).toBe(8)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
@@ -222,7 +222,7 @@ describe('NetworkMaster gameplay rules', () => {
     } & Partial<Omit<GameState, 'version' | 'devices'>>
     v3.devices.forEach((device) => delete device.interference)
     const migrated = migrateSavedGame(v3 as unknown as { version: number })
-    expect(migrated?.version).toBe(6)
+    expect(migrated?.version).toBe(8)
     expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
   })
 
@@ -233,7 +233,7 @@ describe('NetworkMaster gameplay rules', () => {
       packets: [{ id: 'p1' }],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v4)
-    expect(migrated?.version).toBe(6)
+    expect(migrated?.version).toBe(8)
     expect(migrated?.packets).toEqual([])
   })
 
@@ -248,8 +248,70 @@ describe('NetworkMaster gameplay rules', () => {
       }),
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v5)
-    expect(migrated?.version).toBe(6)
+    expect(migrated?.version).toBe(8)
     expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
+  })
+
+  it('migrates a version 6 save by backfilling telemetry fields', () => {
+    const v6 = { ...newGame('home'), version: 6 } as unknown as { version: number } & Partial<
+      Omit<GameState, 'version'>
+    >
+    delete v6.recentLatencyTicks
+    delete v6.recentQueueDelayTicks
+    const migrated = migrateSavedGame(v6 as unknown as { version: number })
+    expect(migrated?.version).toBe(8)
+    expect(migrated?.recentLatencyTicks).toBe(0)
+    expect(migrated?.recentQueueDelayTicks).toBe(0)
+  })
+
+  it('migrates a version 7 save by stamping plain-string events with a tick', () => {
+    const v7 = {
+      ...newGame('home'),
+      version: 7,
+      tick: 42,
+      events: ['Run initialized. Connect clients to bring them online.'],
+    } as unknown as { version: number }
+    const migrated = migrateSavedGame(v7)
+    expect(migrated?.version).toBe(8)
+    expect(migrated?.events).toEqual([
+      { tick: 42, text: 'Run initialized. Connect clients to bring them online.' },
+    ])
+  })
+
+  it('stamps each event with the tick it happened on, not its position in the list', () => {
+    let game = newGame('home')
+    game.budget = 500
+    for (let i = 0; i < 5; i++) game = simulate(game) // several quiet ticks, no new events
+    const tickBeforeAction = game.tick
+    game = buildDevice(game, 'switch')
+    expect(game.events[0].tick).toBe(tickBeforeAction)
+    // The earlier "Run initialized" event keeps its original tick (0), not tickBeforeAction.
+    const initEvent = game.events.find((e) => e.text.includes('Run initialized'))
+    expect(initEvent?.tick).toBe(0)
+  })
+
+  it('tracks rolling delivery latency and queue-delay telemetry', () => {
+    let game = newGame('home')
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    game = addCable(game, pc.id, router.id)
+    expect(game.recentLatencyTicks).toBe(0)
+    game.packets = [
+      {
+        id: 'p1',
+        path: [pc.id, router.id, cloud.id],
+        hop: 1,
+        progress: 0.9, // arrives at the cloud this tick
+        priority: 'bulk',
+        source: pc.id,
+        generatedTick: 0,
+        queuedTicks: 3,
+      },
+    ]
+    game = simulate(game)
+    expect(game.recentLatencyTicks).toBeGreaterThan(0)
+    expect(game.recentQueueDelayTicks).toBe(3)
   })
 
   it('awards a delivery milestone exactly once', () => {
@@ -329,7 +391,7 @@ describe('NetworkMaster gameplay rules', () => {
     accessPoint.interference = 1
     game = simulate(game)
     expect(game.devices.find((d) => d.id === accessPoint.id)!.interference).toBe(0)
-    expect(game.events[0]).toContain('interference cleared')
+    expect(game.events[0].text).toContain('interference cleared')
   })
 
   it('routes some multi-subnet traffic to another device instead of only the cloud', () => {
@@ -468,7 +530,7 @@ describe('NetworkMaster gameplay rules', () => {
     // Rerouting the PC cable's router end onto the TV (an end device) is rejected.
     const blocked = rerouteCable(game, pcCable.id, false, tv.id)
     expect(blocked.cables.find((c) => c.id === pcCable.id)!.to).toBe(router.id)
-    expect(blocked.events[0]).toContain('network equipment')
+    expect(blocked.events[0].text).toContain('network equipment')
   })
 
   it('draws a diagonal cable as a direct line instead of an orthogonal route', () => {

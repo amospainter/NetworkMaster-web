@@ -20,6 +20,7 @@ This web port uses the Swift game and architecture documents in `../NetworkMaste
 - Equipment removal with attached-cable cleanup and 90% build/upgrade salvage
 - Cable VLAN tags and configurable PC/TV/console firewall block rules
 - Native 15% site-upgrade discount and bulk switch-throughput upgrade
+- Site cable upgrade with a 100 Mbps / 1 Gbps target picker (`upgradeAllCables`), matching every intervening tier's cost per cable and excluding the fixed-tier cloud uplink
 - Per-scenario warm-up demand easing (`warmupFloor`/`warmupTicks`)
 - Challenge-event roster: traffic spike, budget bonus, device surge, and equipment-failure event
 - Delivery-count milestone budget awards
@@ -29,11 +30,17 @@ This web port uses the Swift game and architecture documents in `../NetworkMaste
 - Real per-device packet buffers with strict-priority admission (router/switch/wireless/firewall admit only PPS-many packets per tick, highest priority first; overflow waits up to 6 ticks in a real per-device queue, shown in the inspector, before dropping)
 - Endpoint cable rerouting (move either end of an existing cable to a new device, preserving tier/VLAN/style/investment) and diagonal cable drawing (straight-line style as an alternative to the orthogonal lane router)
 - Access-point client balancing: a wireless device prefers the least-loaded in-range hub instead of always the nearest, so wireless-capable clients spread across multiple access points
+- Latency/queue-delay telemetry: rolling-average delivery latency and per-packet forwarding-queue delay (`recentLatencyTicks`/`recentQueueDelayTicks`), shown in Run Stats
+- Personal leaderboard history: the 10 highest-scoring completed runs, persisted locally and browsable from the menu, Run Stats, and the game-over screen
+- 5-step onboarding tutorial card, shown once per browser on first visit
+- "Jackie" advisor: a single contextual tip prioritized by network state (failure pressure, congestion, out-of-range devices, low budget, queue delay, combo streak)
+- Minimap: a static read-only topology overview in the canvas corner
+- Zoom/pan canvas: wheel-to-zoom and drag-to-pan over the topology, plus zoom in/out/reset controls
 
 ## Remaining native-only systems
 
-- Seeded deterministic replay, latency/queue-delay telemetry, and full leaderboard history
-- Native tutorial sequence, Jackie advisor, minimap, zoom/pan canvas, audio/haptics, and accessibility custom actions
+- Seeded deterministic replay (the web port's RNG calls are not seed-driven the way native's are, so runs are not bit-for-bit reproducible)
+- Audio/haptics and accessibility custom actions (no Web Audio/haptic feedback layer or VoiceOver-equivalent custom actions are implemented)
 
 The remaining items require additional simulation state or browser-specific interaction work; the current port prioritizes the core endless topology/capacity/failure loop.
 

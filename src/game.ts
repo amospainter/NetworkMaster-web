@@ -4,6 +4,7 @@ import type {
   CableTier,
   Device,
   DeviceKind,
+  GameEvent,
   GameState,
   Packet,
   Priority,
@@ -188,6 +189,15 @@ const createId = () => {
 /** Removes Vue proxies and guarantees reducers return a new serializable state tree. */
 const cloneState = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
+/** Builds a timestamped event, so the HUD can show when it happened instead of guessing from list position. */
+const event = (state: GameState, text: string): GameEvent => ({ tick: state.tick, text })
+
+/** Records a timestamped event on a mutable draft state, capping the log at 6 entries. */
+const addEvent = (state: GameState, text: string) => {
+  state.events.unshift(event(state, text))
+  if (state.events.length > 6) state.events.length = 6
+}
+
 const DEVICE_RULES: Record<
   DeviceKind,
   { ports: number; pps: number; priority: Priority; rate: number }
@@ -348,7 +358,7 @@ export function newGame(scenario = 'home'): GameState {
       ).length),
   )
   return {
-    version: 6,
+    version: 8,
     phase: 'playing',
     scenario: scenarioConfig.id,
     tick: 0,
@@ -360,7 +370,7 @@ export function newGame(scenario = 'home'): GameState {
     speed: 1,
     ...topology,
     packets: [],
-    events: ['Run initialized. Connect clients to bring them online.'],
+    events: [{ tick: 0, text: 'Run initialized. Connect clients to bring them online.' }],
     recentDrops: [],
     multiplier: 1,
     combo: 1,
@@ -371,6 +381,8 @@ export function newGame(scenario = 'home'): GameState {
     unscored: false,
     milestonesReached: [],
     activeEvents: [],
+    recentLatencyTicks: 0,
+    recentQueueDelayTicks: 0,
   }
 }
 
@@ -460,8 +472,9 @@ export function networkHealthBonus(state: GameState): number {
  * Upgrades a persisted save to the current schema, or returns null if it is too
  * old to migrate safely. Version 2 runs predate challenge events and milestones;
  * version 3 runs predate Wi-Fi interference; version 4 runs predate per-packet
- * queue admission; version 5 runs predate cable styles. Older or malformed
- * saves are discarded.
+ * queue admission; version 5 runs predate cable styles; version 6 runs predate
+ * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps.
+ * Older or malformed saves are discarded.
  */
 export function migrateSavedGame(
   savedGame: { version: number } & Partial<Omit<GameState, 'version'>>,
@@ -493,7 +506,23 @@ export function migrateSavedGame(
     })
     savedGame.version = 6
   }
-  return savedGame.version === 6 ? (savedGame as GameState) : null
+  if (savedGame.version === 6) {
+    savedGame.recentLatencyTicks ??= 0
+    savedGame.recentQueueDelayTicks ??= 0
+    savedGame.version = 7
+  }
+  if (savedGame.version === 7) {
+    // Legacy plain-string events predate per-event tick stamps; the original
+    // tick each happened on isn't recoverable, so they're stamped with the
+    // save's current tick as a one-time best-effort backfill.
+    const legacyEvents = savedGame.events as unknown as string[] | undefined
+    savedGame.events = (legacyEvents ?? []).map((text) => ({
+      tick: savedGame.tick ?? 0,
+      text,
+    }))
+    savedGame.version = 8
+  }
+  return savedGame.version === 8 ? (savedGame as GameState) : null
 }
 
 const distanceBetween = (firstDevice: Device, secondDevice: Device) =>
@@ -505,8 +534,12 @@ export const hubRange = (hub: Device) =>
   (hub.interference > 0 ? WIFI_INTERFERENCE_RANGE_FACTOR : 1)
 
 /** Effective Wi-Fi throughput for a hub, halved while it suffers interference. */
-const hubPps = (hub: Device) =>
+export const hubPps = (hub: Device) =>
   Math.max(1, Math.floor(hub.pps * (hub.interference > 0 ? WIFI_INTERFERENCE_PPS_FACTOR : 1)))
+
+/** A forwarding device's effective per-tick admission capacity. */
+export const deviceCapacity = (device: Device) =>
+  device.kind === 'wireless' ? hubPps(device) : device.pps
 
 /** Counts the wireless-capable clients currently inside a hub's coverage circle. */
 const wirelessClientLoad = (state: GameState, hub: Device) =>
@@ -670,7 +703,8 @@ function spawnDevice(s: GameState) {
     )
   s.devices.push(d)
   s.spawned++
-  s.events.unshift(
+  addEvent(
+    s,
     `${d.label} joined — ${WIRELESS_ONLY_KINDS.includes(kind) ? 'move it into Wi-Fi coverage' : 'draw a cable, or move it into Wi-Fi coverage'}.`,
   )
 }
@@ -718,18 +752,18 @@ function rollChallengeEvent(state: GameState, scenario: Scenario) {
       ticksRemaining: 10,
       targetId: target.id,
     })
-    state.events.unshift(`Traffic spike: ${target.label} doubles demand for 10 ticks.`)
+    addEvent(state, `Traffic spike: ${target.label} doubles demand for 10 ticks.`)
     return
   }
   if (kind === 'budgetBonus') {
     state.budget += 75
-    state.events.unshift('Budget bonus! +$75')
+    addEvent(state, 'Budget bonus! +$75')
     return
   }
   if (kind === 'deviceSurge') {
     spawnDevice(state)
     spawnDevice(state)
-    state.events.unshift('Device surge! Two new devices joined the network.')
+    addEvent(state, 'Device surge! Two new devices joined the network.')
     return
   }
   // equipmentFailure: fail a worn, online infrastructure device outright.
@@ -746,7 +780,7 @@ function rollChallengeEvent(state: GameState, scenario: Scenario) {
   target.wear += 30
   target.offline = true
   state.packets = []
-  state.events.unshift(`${target.label} failed! Repair or replace it.`)
+  addEvent(state, `${target.label} failed! Repair or replace it.`)
 }
 
 /** Decrements timed events, announces expirations, and drops spent entries. */
@@ -755,7 +789,7 @@ function tickActiveEvents(state: GameState) {
     event.ticksRemaining--
     if (event.ticksRemaining <= 0 && event.kind === 'trafficSpike') {
       const target = state.devices.find((device) => device.id === event.targetId)
-      state.events.unshift(`Traffic spike on ${target?.label ?? 'device'} subsided.`)
+      addEvent(state, `Traffic spike on ${target?.label ?? 'device'} subsided.`)
     }
   }
   state.activeEvents = state.activeEvents.filter((event) => event.ticksRemaining > 0)
@@ -772,7 +806,7 @@ function tickWirelessInterference(state: GameState) {
     if (device.interference > 0) {
       device.interference--
       if (device.interference === 0) {
-        state.events.unshift(`${device.label} interference cleared.`)
+        addEvent(state, `${device.label} interference cleared.`)
       }
       continue
     }
@@ -787,7 +821,7 @@ function tickWirelessInterference(state: GameState) {
     const chancePerTick = serving ? 0.007 : 0.002
     if (Math.random() < chancePerTick) {
       device.interference = 8 + Math.floor(Math.random() * 11) // 8-18 ticks
-      state.events.unshift(`${device.label} hit by Wi-Fi interference — range & speed cut.`)
+      addEvent(state, `${device.label} hit by Wi-Fi interference — range & speed cut.`)
     }
   }
 }
@@ -799,7 +833,7 @@ function checkMilestones(state: GameState) {
     if (state.delivered < milestone.at || state.milestonesReached.includes(milestone.at)) continue
     state.milestonesReached.push(milestone.at)
     state.budget += milestone.award
-    state.events.unshift(`Milestone: ${milestone.at} packets delivered! +$${milestone.award}`)
+    addEvent(state, `Milestone: ${milestone.at} packets delivered! +$${milestone.award}`)
   }
 }
 
@@ -855,8 +889,7 @@ export function simulate(state: GameState): GameState {
       admittedPackets.push(...arrivals)
       continue
     }
-    const capacity =
-      arrivingDevice.kind === 'wireless' ? hubPps(arrivingDevice) : arrivingDevice.pps
+    const capacity = deviceCapacity(arrivingDevice)
     const ordered = [...arrivals].sort(
       (a, b) => PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority],
     )
@@ -900,6 +933,15 @@ export function simulate(state: GameState): GameState {
     const redundancyBonus =
       independentPathCount(nextState, deliveredPacket.source, destinationId) >= 2 ? 5 : 0
     nextState.score += 10 * nextState.multiplier * nextState.combo + redundancyBonus
+    const latency = Math.max(0, nextState.tick - deliveredPacket.generatedTick)
+    nextState.recentLatencyTicks =
+      nextState.recentLatencyTicks === 0
+        ? latency
+        : nextState.recentLatencyTicks * 0.75 + latency * 0.25
+    nextState.recentQueueDelayTicks =
+      nextState.recentQueueDelayTicks === 0
+        ? deliveredPacket.queuedTicks
+        : nextState.recentQueueDelayTicks * 0.75 + deliveredPacket.queuedTicks * 0.25
   }
 
   for (const activePacket of inFlightPackets) {
@@ -968,7 +1010,7 @@ export function simulate(state: GameState): GameState {
   if (nextState.tick % 15 === 0) {
     const income = 25 + 5 * nextState.multiplier
     nextState.budget += income
-    nextState.events.unshift(`Budget allocation received: +$${income}`)
+    addEvent(nextState, `Budget allocation received: +$${income}`)
   }
   if (nextState.tick % 90 === 0) nextState.multiplier++
   if (nextState.tick >= scenarioConfig.rampStart && nextState.tick % 90 === 0) {
@@ -988,13 +1030,13 @@ export function simulate(state: GameState): GameState {
     if (failedCable) {
       failedCable.status = 'failed'
       failedCable.failedTicks = 4
-      nextState.events.unshift('Cable fault — rerouting traffic for 4 ticks.')
+      addEvent(nextState, 'Cable fault — rerouting traffic for 4 ticks.')
     }
   }
 
   // Warn equipment-failure scenarios 5 ticks before challenge events begin.
   if (scenarioConfig.equipmentFailure && nextState.tick === scenarioConfig.challengeStart - 5) {
-    nextState.events.unshift('Network stress event imminent — check your infrastructure.')
+    addEvent(nextState, 'Network stress event imminent — check your infrastructure.')
   }
   if (
     nextState.tick >= scenarioConfig.challengeStart &&
@@ -1015,7 +1057,8 @@ export function simulate(state: GameState): GameState {
     nextState.phase = 'gameover'
     const healthBonus = networkHealthBonus(nextState)
     nextState.score += healthBonus
-    nextState.events.unshift(
+    addEvent(
+      nextState,
       `Network failure threshold exceeded.${healthBonus ? ` Network health bonus: +${healthBonus}.` : ''}`,
     )
   }
@@ -1037,34 +1080,40 @@ export function addCable(
   if ([a, b].some((d) => WIRELESS_ONLY_KINDS.includes(d.kind)))
     return {
       ...state,
-      events: ['Phones and tablets connect through Wi-Fi coverage only.', ...state.events].slice(
-        0,
-        6,
-      ),
+      events: [
+        event(state, 'Phones and tablets connect through Wi-Fi coverage only.'),
+        ...state.events,
+      ].slice(0, 6),
     }
   if (s.cables.some((c) => (c.from === from && c.to === to) || (c.from === to && c.to === from)))
     return state
   if (a.ports >= a.maxPorts || b.ports >= b.maxPorts)
     return {
       ...state,
-      events: ['Connection rejected: no free ports.', ...state.events].slice(0, 6),
+      events: [event(state, 'Connection rejected: no free ports.'), ...state.events].slice(0, 6),
     }
   const end = (d: Device) => ['pc', 'tv', 'console', 'server'].includes(d.kind)
   if (end(a) && end(b))
     return {
       ...state,
-      events: ['End devices need network equipment between them.', ...state.events].slice(0, 6),
+      events: [
+        event(state, 'End devices need network equipment between them.'),
+        ...state.events,
+      ].slice(0, 6),
     }
   if ((a.kind === 'cloud' || b.kind === 'cloud') && a.kind !== 'router' && b.kind !== 'router')
     return {
       ...state,
-      events: ['Only a router may connect to the Cloud Edge.', ...state.events].slice(0, 6),
+      events: [event(state, 'Only a router may connect to the Cloud Edge.'), ...state.events].slice(
+        0,
+        6,
+      ),
     }
   s.cables.push(createCable(a, b, 'Copper', null, style))
   a.ports++
   b.ports++
   s.packets = []
-  s.events.unshift(`${a.label} linked to ${b.label}.`)
+  addEvent(s, `${a.label} linked to ${b.label}.`)
   return s
 }
 
@@ -1093,15 +1142,18 @@ export function rerouteCable(
   if (end(fixed) && end(target))
     return {
       ...state,
-      events: ['End devices need network equipment between them.', ...state.events].slice(0, 6),
+      events: [
+        event(state, 'End devices need network equipment between them.'),
+        ...state.events,
+      ].slice(0, 6),
     }
   if ([fixed, target].some((d) => WIRELESS_ONLY_KINDS.includes(d.kind)))
     return {
       ...state,
-      events: ['Phones and tablets connect through Wi-Fi coverage only.', ...state.events].slice(
-        0,
-        6,
-      ),
+      events: [
+        event(state, 'Phones and tablets connect through Wi-Fi coverage only.'),
+        ...state.events,
+      ].slice(0, 6),
     }
   if (
     (fixed.kind === 'cloud' || target.kind === 'cloud') &&
@@ -1110,7 +1162,10 @@ export function rerouteCable(
   )
     return {
       ...state,
-      events: ['Only a router may connect to the Cloud Edge.', ...state.events].slice(0, 6),
+      events: [event(state, 'Only a router may connect to the Cloud Edge.'), ...state.events].slice(
+        0,
+        6,
+      ),
     }
   if (
     s.cables.some(
@@ -1122,22 +1177,22 @@ export function rerouteCable(
   )
     return {
       ...state,
-      events: ['That connection already exists.', ...state.events].slice(0, 6),
+      events: [event(state, 'That connection already exists.'), ...state.events].slice(0, 6),
     }
   if (target.ports >= target.maxPorts)
     return {
       ...state,
-      events: [`${target.label} has no free ports for this connection.`, ...state.events].slice(
-        0,
-        6,
-      ),
+      events: [
+        event(state, `${target.label} has no free ports for this connection.`),
+        ...state.events,
+      ].slice(0, 6),
     }
   moving.ports--
   target.ports++
   if (movingFromEnd) cable.from = newDeviceId
   else cable.to = newDeviceId
   s.packets = []
-  s.events.unshift(`Rerouted connection to ${target.label}.`)
+  addEvent(s, `Rerouted connection to ${target.label}.`)
   return s
 }
 const costs: Partial<Record<DeviceKind, number>> = {
@@ -1165,12 +1220,12 @@ export function deviceRemovalRefund(device: Device): number {
 export function buildDevice(state: GameState, kind: DeviceKind, x = 50, y = 55): GameState {
   const cost = costs[kind] ?? 999
   if (state.budget < cost)
-    return { ...state, events: ['Insufficient budget.', ...state.events].slice(0, 6) }
+    return { ...state, events: [event(state, 'Insufficient budget.'), ...state.events].slice(0, 6) }
   const s = cloneState(state),
     count = s.devices.filter((d) => d.kind === kind).length + 1
   s.devices.push(createDevice(kind, `${kind[0].toUpperCase() + kind.slice(1)}-${count}`, x, y))
   s.budget -= cost
-  s.events.unshift(`${kind} placed. Drag it into position.`)
+  addEvent(s, `${kind} placed. Drag it into position.`)
   return s
 }
 /** Advances a cable by one tier and records its refundable player investment. */
@@ -1185,13 +1240,13 @@ export function upgradeCable(state: GameState, cableId: string): GameState {
   if (s.budget < cost)
     return {
       ...state,
-      events: ['Insufficient budget for cable upgrade.', ...state.events].slice(0, 6),
+      events: [event(state, 'Insufficient budget for cable upgrade.'), ...state.events].slice(0, 6),
     }
   c.tier = next.name
   c.capacity = next.capacity
   c.upgradeSpend += cost
   s.budget -= cost
-  s.events.unshift(`Cable upgraded to ${next.name}.`)
+  addEvent(s, `Cable upgraded to ${next.name}.`)
   return s
 }
 /** Removes a cable, clears in-flight traffic, and returns 90% of upgrade spend. */
@@ -1207,7 +1262,7 @@ export function deleteCable(state: GameState, cableId: string): GameState {
   const refund = Math.floor(c.upgradeSpend * 0.9)
   s.budget += refund
   s.packets = []
-  s.events.unshift(`Cable removed${refund ? ` · $${refund} salvaged` : ''}.`)
+  addEvent(s, `Cable removed${refund ? ` · $${refund} salvaged` : ''}.`)
   return s
 }
 
@@ -1219,7 +1274,7 @@ export function cycleCableVlan(state: GameState, cableId: string): GameState {
   networkCable.vlan =
     networkCable.vlan === null ? 1 : networkCable.vlan >= 4 ? null : networkCable.vlan + 1
   nextState.packets = []
-  nextState.events.unshift(`Cable VLAN set to ${networkCable.vlan ?? 'untagged'}.`)
+  addEvent(nextState, `Cable VLAN set to ${networkCable.vlan ?? 'untagged'}.`)
   return nextState
 }
 
@@ -1232,7 +1287,7 @@ export function cycleFirewallRule(state: GameState, deviceId: string): GameState
   const nextRuleIndex = (rules.indexOf(firewall.firewallRule) + 1) % rules.length
   firewall.firewallRule = rules[nextRuleIndex]
   nextState.packets = []
-  nextState.events.unshift(`${firewall.label} block rule: ${firewall.firewallRule ?? 'none'}.`)
+  addEvent(nextState, `${firewall.label} block rule: ${firewall.firewallRule ?? 'none'}.`)
   return nextState
 }
 /** Adds two physical ports to a router or switch. */
@@ -1240,7 +1295,10 @@ export function upgradeDevicePorts(state: GameState, deviceId: string): GameStat
   if (state.budget < 50)
     return {
       ...state,
-      events: ['Insufficient budget for port expansion.', ...state.events].slice(0, 6),
+      events: [event(state, 'Insufficient budget for port expansion.'), ...state.events].slice(
+        0,
+        6,
+      ),
     }
   const s = cloneState(state),
     d = s.devices.find((x) => x.id === deviceId)
@@ -1248,7 +1306,7 @@ export function upgradeDevicePorts(state: GameState, deviceId: string): GameStat
   d.maxPorts += 2
   d.upgradeSpend += 50
   s.budget -= 50
-  s.events.unshift(`${d.label} expanded by 2 ports.`)
+  addEvent(s, `${d.label} expanded by 2 ports.`)
   return s
 }
 /** Raises forwarding throughput for a router or switch. */
@@ -1261,7 +1319,7 @@ export function upgradeDeviceSpeed(state: GameState, deviceId: string): GameStat
   d.pps += d.kind === 'router' ? 8 : 4
   d.upgradeSpend += upgradeCost
   s.budget -= upgradeCost
-  s.events.unshift(`${d.label} forwarding capacity upgraded.`)
+  addEvent(s, `${d.label} forwarding capacity upgraded.`)
   return s
 }
 /** Advances an access point to the next Wi-Fi generation. */
@@ -1275,7 +1333,7 @@ export function upgradeWifi(state: GameState, deviceId: string): GameState {
   d.pps = WIFI_STANDARDS[d.wifiLevel].pps
   d.upgradeSpend += cost
   s.budget -= cost
-  s.events.unshift(`${d.label} upgraded to ${WIFI_STANDARDS[d.wifiLevel].name}.`)
+  addEvent(s, `${d.label} upgraded to ${WIFI_STANDARDS[d.wifiLevel].name}.`)
   return s
 }
 /** Restores an infrastructure device while intentionally retaining accumulated wear. */
@@ -1287,7 +1345,7 @@ export function repairDevice(state: GameState, deviceId: string): GameState {
   d.health = 100
   d.offline = false
   s.budget -= 40
-  s.events.unshift(`${d.label} repaired; accumulated wear remains.`)
+  addEvent(s, `${d.label} repaired; accumulated wear remains.`)
   return s
 }
 
@@ -1324,7 +1382,7 @@ export function removeDevice(state: GameState, deviceId: string): GameState {
   }
   nextState.packets = []
   nextState.budget += equipmentRefund + cableRefund
-  nextState.events.unshift(`Removed ${device.label} (+$${equipmentRefund + cableRefund} salvage).`)
+  addEvent(nextState, `Removed ${device.label} (+$${equipmentRefund + cableRefund} salvage).`)
   return nextState
 }
 /** True when a cable is the fixed-tier ISP uplink, excluded from site bulk-upgrades. */
@@ -1367,9 +1425,12 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
     return {
       ...state,
       events: [
-        targets.length
-          ? 'Insufficient budget for site cable upgrade.'
-          : `All connections already meet the ${target} standard.`,
+        event(
+          state,
+          targets.length
+            ? 'Insufficient budget for site cable upgrade.'
+            : `All connections already meet the ${target} standard.`,
+        ),
         ...state.events,
       ].slice(0, 6),
     }
@@ -1383,7 +1444,7 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
       c.upgradeSpend += Math.floor(cost / targets.length)
     })
   s.budget -= cost
-  s.events.unshift(`Site upgrade: ${targets.length} links moved to ${target}.`)
+  addEvent(s, `Site upgrade: ${targets.length} links moved to ${target}.`)
   return s
 }
 /** Applies the discounted two-port expansion to every router and switch. */
@@ -1393,7 +1454,10 @@ export function upgradeAllPorts(state: GameState): GameState {
   if (!targets.length || state.budget < cost)
     return {
       ...state,
-      events: ['Insufficient budget for site port expansion.', ...state.events].slice(0, 6),
+      events: [event(state, 'Insufficient budget for site port expansion.'), ...state.events].slice(
+        0,
+        6,
+      ),
     }
   const s = cloneState(state)
   s.devices
@@ -1403,7 +1467,7 @@ export function upgradeAllPorts(state: GameState): GameState {
       d.upgradeSpend += Math.floor(cost / targets.length)
     })
   s.budget -= cost
-  s.events.unshift('Site upgrade: +2 ports on all network equipment.')
+  addEvent(s, 'Site upgrade: +2 ports on all network equipment.')
   return s
 }
 
@@ -1414,7 +1478,10 @@ export function upgradeAllSwitchSpeed(state: GameState): GameState {
   if (!switches.length || state.budget < cost) {
     return {
       ...state,
-      events: ['Insufficient budget for the site switch upgrade.', ...state.events].slice(0, 6),
+      events: [
+        event(state, 'Insufficient budget for the site switch upgrade.'),
+        ...state.events,
+      ].slice(0, 6),
     }
   }
   const nextState = cloneState(state)
@@ -1425,7 +1492,7 @@ export function upgradeAllSwitchSpeed(state: GameState): GameState {
       networkSwitch.upgradeSpend += Math.floor(cost / switches.length)
     })
   nextState.budget -= cost
-  nextState.events.unshift(`Site upgrade: faster forwarding on ${switches.length} switches.`)
+  addEvent(nextState, `Site upgrade: faster forwarding on ${switches.length} switches.`)
   return nextState
 }
 /** Moves a device while clamping it inside the playable canvas. */

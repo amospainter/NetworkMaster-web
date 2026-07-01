@@ -73,6 +73,12 @@ export type ActiveEvent = {
   targetId: string | null
 }
 
+/** A live-feed entry, stamped with the tick it happened on rather than inferred from list position. */
+export type GameEvent = {
+  tick: number
+  text: string
+}
+
 /** A packet moving between adjacent devices along a precomputed route. */
 export type Packet = {
   id: string
@@ -88,7 +94,7 @@ export type Packet = {
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
-  version: 6
+  version: 8
   phase: 'playing' | 'paused' | 'gameover'
   scenario: string
   tick: number
@@ -101,7 +107,7 @@ export type GameState = {
   devices: Device[]
   cables: Cable[]
   packets: Packet[]
-  events: string[]
+  events: GameEvent[]
   recentDrops: number[]
   multiplier: number
   combo: number
@@ -114,6 +120,20 @@ export type GameState = {
   milestonesReached: number[]
   /** Timed challenge events currently in effect (e.g. an active traffic spike). */
   activeEvents: ActiveEvent[]
+  /** Rolling end-to-end delivery latency in ticks (generation to arrival at the cloud/destination), weighted 75/25 toward history like the native HUD. */
+  recentLatencyTicks: number
+  /** Rolling per-packet queue delay in ticks accrued waiting at forwarding-device queues, same 75/25 weighting. */
+  recentQueueDelayTicks: number
+}
+
+/** A completed run recorded for the local leaderboard, newest entries kept first. */
+export type LeaderboardEntry = {
+  id: string
+  scenario: string
+  score: number
+  delivered: number
+  tick: number
+  completedAt: number
 }
 
 /** Scenario presentation plus its simulation pacing thresholds. */

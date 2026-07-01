@@ -5,8 +5,17 @@
   background: #edf1f0;
   font-synthesis: none;
 }
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+#root {
+  height: 100%;
+}
 .app {
-  min-height: 100vh;
+  min-height: 100%;
   background: #f2f4f1;
   color: #13222d;
   --bg: #f2f4f1;
@@ -33,10 +42,13 @@
   box-sizing: border-box;
 }
 button {
+  appearance: none;
+  -webkit-appearance: none;
   font: inherit;
   color: inherit;
   background: none;
   border: 0;
+  border-radius: 0;
   cursor: pointer;
 }
 button:focus-visible {
@@ -53,7 +65,7 @@ svg {
   gap: 12px;
   font-weight: 800;
   letter-spacing: -0.06em;
-  font-size: 22px;
+  font-size: 20px;
 }
 .brand > svg {
   background: var(--lime);
@@ -67,7 +79,7 @@ svg {
   color: #1b958c;
 }
 .brand.small {
-  font-size: 17px;
+  font-size: 15px;
 }
 .brand.small > svg {
   width: 31px;
@@ -93,7 +105,7 @@ nav > div {
 }
 .local-pill,
 .scenario-tag {
-  font: 500 11px DM Mono;
+  font: 500 10px DM Mono;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 99px;
@@ -120,12 +132,12 @@ nav > div {
   opacity: 0.65;
 }
 .overline {
-  font: 500 11px DM Mono;
+  font: 500 10px DM Mono;
   letter-spacing: 0.16em;
   color: #0d9388;
 }
 .hero h1 {
-  font-size: clamp(50px, 7vw, 94px);
+  font-size: clamp(45px, 6.3vw, 85px);
   letter-spacing: -0.065em;
   line-height: 0.94;
   margin: 20px 0 30px;
@@ -138,7 +150,7 @@ nav > div {
   color: #0b9186;
 }
 .lede {
-  font-size: 18px;
+  font-size: 16px;
   color: var(--muted);
   max-width: 560px;
   line-height: 1.7;
@@ -173,14 +185,43 @@ nav > div {
   bottom: 70px;
   z-index: 1;
   text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 .best span {
   display: block;
-  font: 11px DM Mono;
+  font: 10px DM Mono;
   color: var(--muted);
 }
 .best b {
-  font-size: 40px;
+  font-size: 36px;
+}
+.leaderboard-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+.leaderboard-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.leaderboard-list .rank {
+  font: 10px DM Mono;
+  color: var(--muted);
+  width: 28px;
+}
+.leaderboard-meta {
+  display: flex;
+  flex-direction: column;
+}
+.leaderboard-meta small {
+  color: var(--muted);
+  font-size: 9px;
 }
 .scenario-section {
   padding: 90px clamp(24px, 6vw, 90px);
@@ -193,7 +234,7 @@ nav > div {
   align-items: end;
 }
 .section-head h2 {
-  font-size: 42px;
+  font-size: 38px;
   letter-spacing: -0.04em;
   margin: 8px 0;
 }
@@ -226,11 +267,11 @@ nav > div {
   position: absolute;
   top: 16px;
   right: 16px;
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: #078e83;
 }
 .num {
-  font: 12px DM Mono;
+  font: 11px DM Mono;
   color: var(--muted);
 }
 .topology-mini {
@@ -275,16 +316,16 @@ nav > div {
   border-inline: 1px solid #15978d;
 }
 .scenario-card > p {
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: #15978d;
   letter-spacing: 0.1em;
 }
 .scenario-card h3 {
-  font-size: 21px;
+  font-size: 19px;
   margin: 8px 0;
 }
 .scenario-card > span {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.6;
 }
@@ -292,7 +333,7 @@ nav > div {
   display: flex;
   align-items: center;
   gap: 4px;
-  font: 9px DM Mono;
+  font: 8px DM Mono;
   color: var(--muted);
   margin-top: 18px;
 }
@@ -308,7 +349,7 @@ nav > div {
   padding: 22px clamp(24px, 6vw, 90px);
   display: flex;
   justify-content: space-between;
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: var(--muted);
 }
 .game-shell {
@@ -358,13 +399,13 @@ nav > div {
   padding-left: 3px;
 }
 .metric span {
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   text-transform: uppercase;
   color: var(--muted);
   display: block;
 }
 .metric b {
-  font-size: 22px;
+  font-size: 20px;
 }
 .metric.accent b {
   color: #0b9186;
@@ -378,7 +419,7 @@ nav > div {
   margin-right: 20px;
 }
 .pressure > span {
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: var(--muted);
   display: flex;
   justify-content: space-between;
@@ -409,11 +450,18 @@ nav > div {
 .canvas {
   position: absolute;
   inset: 0;
+  overflow: hidden;
   background-color: var(--bg);
   background-image:
     linear-gradient(var(--grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;
+  touch-action: none;
+}
+.canvas-stage {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
 }
 .links {
   position: absolute;
@@ -442,8 +490,9 @@ nav > div {
   stroke: var(--red);
 }
 .links path.selected {
-  stroke: #e9cf4a;
+  stroke: var(--lime);
   stroke-width: 0.7;
+  animation: pulse-link 1.4s ease-in-out infinite;
 }
 .device {
   position: absolute;
@@ -483,12 +532,46 @@ nav > div {
 .device.selected > span {
   outline: 3px solid var(--lime);
   outline-offset: 4px;
+  animation: pulse 1.4s ease-in-out infinite;
 }
 .device.cabling > span {
   animation: pulse 1s infinite;
 }
+.device.offline > span {
+  border-color: var(--red);
+}
+.device > span > * {
+  grid-area: 1 / 1;
+}
+.icon-primary {
+  animation: blink-primary 1.6s steps(1, end) infinite;
+}
+.icon-unplugged {
+  color: var(--red);
+  animation: blink-unplugged 1.6s steps(1, end) infinite;
+}
+@keyframes blink-primary {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes blink-unplugged {
+  0%,
+  49% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
 .device b {
-  font: 600 11px DM Mono;
+  font: 600 10px DM Mono;
   background: var(--bg);
   padding: 3px 5px;
   margin-top: 5px;
@@ -497,6 +580,34 @@ nav > div {
 .device small {
   font: 8px DM Mono;
   color: var(--muted);
+}
+.throughput-bar {
+  width: 40px;
+  height: 4px;
+  background: var(--grid);
+  border-radius: 99px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+.throughput-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--lime), #e6b128, var(--red));
+}
+.throughput-bar.over i {
+  background: var(--red);
+}
+.inspector-pressure {
+  width: 100%;
+  margin: 0;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+.inspector-pressure > div {
+  margin-top: 7px;
+}
+.inspector-pressure i.over {
+  background: var(--red);
 }
 .packet {
   position: absolute;
@@ -533,7 +644,7 @@ nav > div {
   border-radius: 8px;
 }
 .panel-title {
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: var(--muted);
   display: flex;
   gap: 6px;
@@ -559,13 +670,13 @@ nav > div {
   opacity: 0.35;
 }
 .build-panel button span {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 .build-panel small {
   display: block;
   color: var(--muted);
-  font: 9px DM Mono;
+  font: 8px DM Mono;
 }
 .build-panel svg {
   width: 17px;
@@ -602,12 +713,12 @@ nav > div {
   color: #21a99c;
 }
 .inspector h2 {
-  font-size: 20px;
+  font-size: 18px;
   margin: 0;
 }
 .inspect-head p {
   margin: 3px 0;
-  font: 9px DM Mono;
+  font: 8px DM Mono;
   color: var(--muted);
 }
 .stat {
@@ -615,7 +726,7 @@ nav > div {
   justify-content: space-between;
   padding: 11px 0;
   border-top: 1px solid var(--line);
-  font-size: 12px;
+  font-size: 11px;
 }
 .stat span {
   color: var(--muted);
@@ -632,7 +743,7 @@ nav > div {
   font-weight: 700;
 }
 .hint {
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.5;
   color: var(--muted);
 }
@@ -644,7 +755,7 @@ nav > div {
   border-radius: 7px;
 }
 .events > div {
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -655,13 +766,13 @@ nav > div {
 }
 .events p {
   margin: 8px 0 0;
-  font-size: 10px;
+  font-size: 9px;
   color: var(--muted);
   display: flex;
   gap: 10px;
 }
 .events p span {
-  font: 9px DM Mono;
+  font: 8px DM Mono;
   color: #21a99c;
 }
 .legend {
@@ -671,7 +782,7 @@ nav > div {
   padding: 9px 12px;
   display: flex;
   gap: 13px;
-  font: 9px DM Mono;
+  font: 8px DM Mono;
 }
 .legend span {
   display: flex;
@@ -695,13 +806,114 @@ nav > div {
   transform: translateX(-50%);
   padding: 8px 12px;
   border-radius: 99px;
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   display: flex;
   align-items: center;
   gap: 7px;
 }
 .canvas-note svg {
   width: 14px;
+}
+.advisor-tip {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  max-width: 380px;
+  padding: 7px 14px;
+  border-radius: 99px;
+  font: 9px DM Mono;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  z-index: 3;
+}
+.advisor-tip svg {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--lime);
+}
+.minimap {
+  position: absolute;
+  right: 14px;
+  bottom: 54px;
+  width: 190px;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 28px #0013;
+  z-index: 3;
+}
+.minimap .panel-title {
+  padding: 0 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.minimap-svg {
+  width: 100%;
+  height: 110px;
+  background: var(--bg);
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.minimap-svg line {
+  stroke: #507d92;
+  stroke-width: 1;
+}
+.minimap-svg rect {
+  fill: #4bb7aa;
+}
+.minimap-svg rect.offline {
+  fill: var(--red);
+}
+.minimap-svg circle.minimap-wifi {
+  fill: color-mix(in srgb, var(--lime) 8%, transparent);
+  stroke: var(--lime);
+  stroke-width: 0.4;
+  stroke-dasharray: 1.4;
+}
+.minimap-svg circle.minimap-wifi.interfered {
+  stroke: #f3a43b;
+}
+.zoom-controls {
+  display: flex;
+  gap: 4px;
+}
+.zoom-controls button {
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+  font: 9px DM Mono;
+}
+.tutorial-card {
+  position: absolute;
+  left: 50%;
+  top: 90px;
+  transform: translateX(-50%);
+  width: 360px;
+  max-width: calc(100% - 28px);
+  padding: 16px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 32px #0017;
+  z-index: 5;
+}
+.tutorial-card p:not(.overline) {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 8px 0 14px;
+}
+.tutorial-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 footer {
   background: var(--panel);
@@ -710,7 +922,7 @@ footer {
   align-items: center;
   padding: 0 15px;
   gap: 25px;
-  font: 9px DM Mono;
+  font: 8px DM Mono;
   color: var(--muted);
 }
 footer span:first-child {
@@ -746,7 +958,7 @@ footer i {
   position: relative;
 }
 .modal h1 {
-  font-size: 34px;
+  font-size: 31px;
   letter-spacing: -0.04em;
 }
 .modal p,
@@ -758,19 +970,25 @@ footer i {
   margin: 10px 0;
 }
 .final-score {
-  font-size: 54px;
+  font-size: 49px;
   font-weight: 800;
   margin: 20px 0;
 }
 .final-score small {
   display: block;
-  font: 10px DM Mono;
+  font: 9px DM Mono;
   color: var(--muted);
 }
 @keyframes pulse {
   50% {
     filter: drop-shadow(0 0 12px var(--lime));
     transform: scale(1.08);
+  }
+}
+@keyframes pulse-link {
+  50% {
+    filter: drop-shadow(0 0 8px var(--lime));
+    stroke-opacity: 0.55;
   }
 }
 @media (max-width: 900px) {
