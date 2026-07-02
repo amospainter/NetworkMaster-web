@@ -4,7 +4,13 @@
  * the test suite may depend on; internals stay in their owning module.
  */
 
-export { CABLE_TIERS, FORWARDING_SPEED_COSTS, SCENARIOS, WIRELESS_CAPABLE_KINDS } from './constants'
+export {
+  CABLE_TIERS,
+  FORWARDING_SPEED_COSTS,
+  FORWARDING_SPEED_GAIN,
+  SCENARIOS,
+  WIRELESS_CAPABLE_KINDS,
+} from './constants'
 
 export { migrateSavedGame, networkHealthBonus, newGame } from './persistence'
 

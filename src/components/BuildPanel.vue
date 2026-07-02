@@ -5,10 +5,11 @@ import type { DeviceKind } from '../types'
 
 defineProps<{
   budget: number
+  activeKind: DeviceKind | null
 }>()
 
 const emit = defineEmits<{
-  place: [kind: DeviceKind]
+  select: [kind: DeviceKind]
 }>()
 </script>
 
@@ -19,10 +20,11 @@ const emit = defineEmits<{
       v-for="[kind, label, cost] in BUILD_OPTIONS"
       :key="kind"
       :disabled="budget < cost"
-      @click="emit('place', kind)"
+      :class="{ active: activeKind === kind }"
+      @click="emit('select', kind)"
     >
       <component :is="deviceIcons[kind]" /><span
-        >{{ label }}<small>${{ cost }}</small></span
+        >{{ label }}<small :class="{ 'danger-text': budget < cost }">${{ cost }}</small></span
       >
     </button>
   </aside>

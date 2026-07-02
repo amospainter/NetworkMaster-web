@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity,
   Cable as CableIcon,
@@ -32,6 +32,7 @@ import {
   deviceCapacity,
   deviceRemovalRefund,
   FORWARDING_SPEED_COSTS,
+  FORWARDING_SPEED_GAIN,
   hubRange,
   independentPathCount,
   migrateSavedGame,
@@ -88,7 +89,20 @@ const cableStart = ref<string | null>(null)
 const cableStyle = ref<'rightAngle' | 'diagonal'>('rightAngle')
 /** Set while rerouting an existing cable's endpoint; cleared once a target device is chosen. */
 const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(null)
+/** Armed build-panel tool; while set, canvas clicks stamp a new device at the cursor. */
+const placingKind = ref<DeviceKind | null>(null)
+/** Cursor position (canvas percent) for the placement ghost outline; null while off-canvas. */
+const ghostPos = ref<{ x: number; y: number } | null>(null)
+const canvasStageEl = ref<HTMLElement | null>(null)
 const modal = ref<'help' | 'stats' | 'upgrades' | 'leaderboard' | null>(null)
+const MODAL_TITLES: Record<'help' | 'stats' | 'upgrades' | 'leaderboard', string> = {
+  help: 'How to play',
+  upgrades: 'Site upgrades',
+  stats: 'Run telemetry',
+  leaderboard: 'Leaderboard',
+}
+const modalTitle = computed(() => (modal.value ? MODAL_TITLES[modal.value] : ''))
+const inspectorTitle = computed(() => (picked.value ? 'Device inspector' : 'Connection'))
 const HELP_SECTIONS = ['Basics', 'Devices & Wi-Fi', 'Scoring & economy', 'Survival'] as const
 const helpSection = ref<(typeof HELP_SECTIONS)[number]>('Basics')
 /** Target tier for the site-wide cable rollout picker; defaults to the cheapest upgrade. */
@@ -103,6 +117,12 @@ const picked = computed(() => game.value?.devices.find((device) => device.id ===
 const pickedCable = computed(() =>
   game.value?.cables.find((networkCable) => networkCable.id === selected.value),
 )
+/** Cost to upgrade the selected cable to the next tier, if one exists. */
+const cableUpgradeCost = computed(() => {
+  const cable = pickedCable.value
+  if (!cable) return 0
+  return CABLE_TIERS[CABLE_TIERS.findIndex((t) => t.name === cable.tier)].cost
+})
 const cableRoutes = computed(() =>
   game.value ? computeCableRoutes(game.value.devices, game.value.cables) : new Map(),
 )
@@ -131,6 +151,14 @@ function queueDepth(deviceId: string): number {
 
 const THROUGHPUT_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
 
+const SPEED_OPTIONS = [0.5, 1, 2, 3]
+/** Cycles simulation speed through SPEED_OPTIONS, wrapping back to the slowest. */
+function cycleSpeed() {
+  if (!game.value) return
+  const next = SPEED_OPTIONS[(SPEED_OPTIONS.indexOf(game.value.speed) + 1) % SPEED_OPTIONS.length]
+  game.value.speed = next
+}
+
 /** Current packets-per-tick flowing over a forwarding device's attached cables. */
 function deviceThroughputUsed(device: Device): number {
   if (!game.value) return 0
@@ -152,7 +180,7 @@ const {
   zoomBy,
   handleCanvasWheel,
   resetView,
-} = useCanvasPanZoom(cableStart, reroutingCable)
+} = useCanvasPanZoom(cableStart, reroutingCable, placingKind)
 
 /** A single contextual tip from "Jackie", the in-game advisor, prioritized by urgency. */
 const advisorTip = computed(() => {
@@ -180,6 +208,24 @@ const advisorTip = computed(() => {
 })
 
 const { packetVisualProgress } = useSimulationClock(game, screen)
+
+/** Escape cancels an armed build tool, same as clicking its panel button again. */
+function handleEscapeKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' && placingKind.value) cancelPlacing()
+}
+/** Right-click cancels an armed build tool (same as Escape) instead of opening the browser menu. */
+function handleContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  if (placingKind.value) cancelPlacing()
+}
+onMounted(() => {
+  window.addEventListener('keydown', handleEscapeKey)
+  window.addEventListener('contextmenu', handleContextMenu)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleEscapeKey)
+  window.removeEventListener('contextmenu', handleContextMenu)
+})
 
 /** Persists the active run and tracks the personal best on every change. */
 watch(
@@ -246,11 +292,37 @@ function closeInspector() {
 function setGame(next: GameState) {
   game.value = next
 }
-/** Places a build-panel device and counts it as a canvas interaction. */
-function placeDevice(kind: DeviceKind) {
-  if (!game.value) return
+/** Arms/disarms the build-panel stamp tool; picking the same kind again cancels it. */
+function armBuildTool(kind: DeviceKind) {
+  placingKind.value = placingKind.value === kind ? null : kind
+  ghostPos.value = null
+}
+/** Converts a pointer event to canvas-percent coordinates within the transformed stage. */
+function canvasPercentPosition(event: PointerEvent): { x: number; y: number } | null {
+  const stage = canvasStageEl.value
+  if (!stage) return null
+  const stageBounds = stage.getBoundingClientRect()
+  return {
+    x: ((event.clientX - stageBounds.left) / stageBounds.width) * 100,
+    y: ((event.clientY - stageBounds.top) / stageBounds.height) * 100,
+  }
+}
+/** Tracks the cursor while a build tool is armed, so the ghost outline follows it. */
+function trackGhost(event: PointerEvent) {
+  moveCanvasPan(event)
+  if (placingKind.value) ghostPos.value = canvasPercentPosition(event)
+}
+/** Stamps the armed build tool at the clicked point; the tool stays armed for repeat placement. */
+function placeArmedDevice(event: PointerEvent) {
+  if (!game.value || !placingKind.value) return
+  const position = canvasPercentPosition(event)
+  if (!position) return
   canvasInteractionCount.value++
-  game.value = buildDevice(game.value, kind)
+  game.value = buildDevice(game.value, placingKind.value, position.x, position.y)
+}
+function cancelPlacing() {
+  placingKind.value = null
+  ghostPos.value = null
 }
 
 /** Removes the selected cable and closes its inspector. */
@@ -270,6 +342,26 @@ function removeSelectedDevice() {
 }
 
 const siteDiscountedCost = (fullPrice: number) => Math.floor(fullPrice * 0.85)
+/** Discounted cost of the site-wide cable rollout to the currently picked tier. */
+const siteCableCost = computed(() =>
+  game.value
+    ? siteDiscountedCost(siteCableUpgradeFullCost(game.value, cableUpgradeTarget.value))
+    : 0,
+)
+/** Discounted cost of the site-wide +2 ports upgrade across all routers/switches. */
+const sitePortCost = computed(() =>
+  game.value
+    ? siteDiscountedCost(
+        game.value.devices.filter((d) => ['router', 'switch'].includes(d.kind)).length * 50,
+      )
+    : 0,
+)
+/** Discounted cost of the site-wide switch throughput upgrade. */
+const siteSwitchSpeedCost = computed(() =>
+  game.value
+    ? siteDiscountedCost(game.value.devices.filter((d) => d.kind === 'switch').length * 60)
+    : 0,
+)
 
 /** Resumes a failed topology without allowing additional leaderboard scoring. */
 function continueUnscored() {
@@ -318,7 +410,7 @@ function packetPos(path: string[], hop: number, progress: number) {
 }
 let activeDrag: { id: string; startX: number; startY: number; moved: boolean } | null = null
 function startDeviceDrag(event: PointerEvent, device: Device) {
-  if (cableStart.value) return
+  if (cableStart.value || placingKind.value) return
   event.stopPropagation() // don't also start a background canvas pan
   activeDrag = { id: device.id, startX: event.clientX, startY: event.clientY, moved: false }
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
@@ -370,20 +462,29 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         @open-help="modal = 'help'"
         @exit-to-menu="screen = 'menu'"
         @toggle-pause="game.phase = game.phase === 'playing' ? 'paused' : 'playing'"
+        @open-leaderboard="modal = 'leaderboard'"
       />
       <div class="workspace">
-        <BuildPanel :budget="game.budget" @place="placeDevice" />
+        <BuildPanel :budget="game.budget" :active-kind="placingKind" @select="armBuildTool" />
         <div
           class="canvas"
+          :class="{ placing: placingKind }"
           @wheel="handleCanvasWheel"
           @pointerdown="startCanvasPan"
-          @pointermove="moveCanvasPan"
+          @pointermove="trackGhost"
           @pointerup="endCanvasPan"
           @pointercancel="endCanvasPan"
+          @pointerleave="ghostPos = null"
+          @click="placeArmedDevice"
         >
-          <div class="canvas-stage" :style="{ transform: canvasTransform }">
+          <div ref="canvasStageEl" class="canvas-stage" :style="{ transform: canvasTransform }">
             <svg class="links" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <g v-for="c in game.cables" :key="c.id" @pointerdown.stop @click="selected = c.id">
+              <g
+                v-for="c in game.cables"
+                :key="c.id"
+                @pointerdown.stop
+                @click="!placingKind && (selected = c.id)"
+              >
                 <path class="link-hit" :d="cablePath(c.id)" />
                 <path :class="[c.status, { selected: selected === c.id }]" :d="cablePath(c.id)" />
               </g>
@@ -454,12 +555,14 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 {{ wirelessHubLabel(d.id) ? 'WI-FI · ' + wirelessHubLabel(d.id) : 'OUT OF RANGE' }}
               </small>
               <small v-else-if="d.kind !== 'cloud'">{{ d.ports }}/{{ d.maxPorts }} PORTS</small>
-              <div
-                v-if="THROUGHPUT_KINDS.includes(d.kind)"
-                class="throughput-bar"
-                :class="{ over: throughputRatio(d) > 1 }"
-              >
-                <i :style="{ width: Math.min(100, throughputRatio(d) * 100) + '%' }" />
+              <div v-if="THROUGHPUT_KINDS.includes(d.kind)" class="throughput-bar">
+                <i
+                  :class="{
+                    warn: throughputRatio(d) >= 0.5 && throughputRatio(d) < 0.85,
+                    over: throughputRatio(d) >= 0.85,
+                  }"
+                  :style="{ width: Math.min(100, throughputRatio(d) * 100) + '%' }"
+                />
               </div>
             </button>
             <i
@@ -472,6 +575,14 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 top: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).y + '%',
               }"
             />
+            <div
+              v-if="placingKind && ghostPos"
+              class="device ghost-device"
+              :class="placingKind"
+              :style="{ left: ghostPos.x + '%', top: ghostPos.y + '%' }"
+            >
+              <span><component :is="deviceIcons[placingKind]" /></span>
+            </div>
           </div>
           <div v-if="cableStart || canvasHintVisible" class="canvas-note">
             <CableIcon />{{
@@ -532,196 +643,236 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           </div>
         </div>
         <aside v-if="picked || pickedCable" class="inspector">
-          <button class="close" @click="closeInspector"><X /></button
-          ><template v-if="picked"
-            ><p class="overline">DEVICE INSPECTOR</p>
-            <div class="inspect-head">
-              <span><component :is="deviceIcons[picked.kind]" /></span>
-              <div>
-                <h2>{{ picked.label }}</h2>
-                <p>{{ picked.kind.toUpperCase() }} · SUBNET {{ picked.subnet }}</p>
+          <div class="modal-titlebar">
+            <span>{{ inspectorTitle }}</span
+            ><button class="close" @click="closeInspector"><X /></button>
+          </div>
+          <div class="inspector-body">
+            <template v-if="picked"
+              ><div class="inspect-head">
+                <span><component :is="deviceIcons[picked.kind]" /></span>
+                <div>
+                  <h2>{{ picked.label }}</h2>
+                  <p>{{ picked.kind.toUpperCase() }} · SUBNET {{ picked.subnet }}</p>
+                </div>
               </div>
-            </div>
-            <div class="stat">
-              <span>Status</span
-              ><b :class="{ 'danger-text': picked.offline }">{{
-                picked.offline ? 'Offline' : 'Online'
-              }}</b>
-            </div>
-            <div class="stat">
-              <span>Ports</span><b>{{ picked.ports }} / {{ picked.maxPorts }}</b>
-            </div>
-            <div class="stat">
-              <span>Health / wear</span><b>{{ picked.health }}% / {{ picked.wear }}</b>
-            </div>
-            <div class="stat">
-              <span>Throughput</span
-              ><b>{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick' }}</b>
-            </div>
-            <div v-if="THROUGHPUT_KINDS.includes(picked.kind)" class="pressure inspector-pressure">
-              <span
-                >Current load
-                <b
-                  >{{ deviceThroughputUsed(picked) }} / {{ deviceCapacity(picked) }} pkt/tick</b
-                ></span
-              >
-              <div>
-                <i
-                  :class="{ over: throughputRatio(picked) > 1 }"
-                  :style="{ width: Math.min(100, throughputRatio(picked) * 100) + '%' }"
-                />
+              <div class="stat">
+                <span>Status</span
+                ><b :class="{ 'danger-text': picked.offline }">{{
+                  picked.offline ? 'Offline' : 'Online'
+                }}</b>
               </div>
-            </div>
-            <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
-              <span>Delivered</span><b>{{ picked.delivered }} / {{ picked.generated }}</b>
-            </div>
-            <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
-              <span>Wireless link</span
-              ><b :class="{ 'danger-text': picked.ports === 0 && !wirelessHubLabel(picked.id) }">
-                {{ wirelessHubLabel(picked.id) ?? 'Out of range' }}
-              </b>
-            </div>
-            <div v-if="!['cloud', 'router'].includes(picked.kind)" class="stat">
-              <span>Independent paths</span
-              ><b>{{
-                independentPathCount(
-                  game!,
-                  picked.id,
-                  game!.devices.find((d) => d.kind === 'cloud')!.id,
-                )
-              }}</b>
-            </div>
-            <div v-if="picked.kind === 'wireless'" class="stat">
-              <span>Wi-Fi</span
-              ><b>{{ wifiInfo(picked)!.name }} · {{ wifiInfo(picked)!.pps }} pkt</b>
-            </div>
-            <div v-if="picked.kind === 'wireless' && picked.interference > 0" class="stat">
-              <span>Status</span
-              ><b class="danger-text"
-                >Interfered — range &amp; speed cut ({{ picked.interference }}t left)</b
+              <div class="stat">
+                <span>Ports</span><b>{{ picked.ports }} / {{ picked.maxPorts }}</b>
+              </div>
+              <div class="stat">
+                <span>Health / wear</span><b>{{ picked.health }}% / {{ picked.wear }}</b>
+              </div>
+              <div class="stat">
+                <span>Throughput</span
+                ><b>{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick' }}</b>
+              </div>
+              <div
+                v-if="THROUGHPUT_KINDS.includes(picked.kind)"
+                class="pressure inspector-pressure"
               >
-            </div>
-            <div
-              v-if="['router', 'switch', 'wireless', 'firewall'].includes(picked.kind)"
-              class="stat"
-            >
-              <span>Queue</span
-              ><b :class="{ 'danger-text': queueDepth(picked.id) > 0 }"
-                >{{ queueDepth(picked.id) }} waiting</b
+                <span
+                  >Current load
+                  <b
+                    >{{ deviceThroughputUsed(picked) }} / {{ deviceCapacity(picked) }} pkt/tick</b
+                  ></span
+                >
+                <div>
+                  <i
+                    :class="{
+                      warn: throughputRatio(picked) >= 0.5 && throughputRatio(picked) < 0.85,
+                      over: throughputRatio(picked) >= 0.85,
+                    }"
+                    :style="{ width: Math.min(100, throughputRatio(picked) * 100) + '%' }"
+                  />
+                </div>
+              </div>
+              <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
+                <span>Delivered</span><b>{{ picked.delivered }} / {{ picked.generated }}</b>
+              </div>
+              <div v-if="WIRELESS_CAPABLE_KINDS.includes(picked.kind)" class="stat">
+                <span>Wireless link</span
+                ><b :class="{ 'danger-text': picked.ports === 0 && !wirelessHubLabel(picked.id) }">
+                  {{ wirelessHubLabel(picked.id) ?? 'Out of range' }}
+                </b>
+              </div>
+              <div v-if="!['cloud', 'router'].includes(picked.kind)" class="stat">
+                <span>Independent paths</span
+                ><b>{{
+                  independentPathCount(
+                    game!,
+                    picked.id,
+                    game!.devices.find((d) => d.kind === 'cloud')!.id,
+                  )
+                }}</b>
+              </div>
+              <div v-if="picked.kind === 'wireless'" class="stat">
+                <span>Wi-Fi</span
+                ><b>{{ wifiInfo(picked)!.name }} · {{ wifiInfo(picked)!.pps }} pkt</b>
+              </div>
+              <div v-if="picked.kind === 'wireless' && picked.interference > 0" class="stat">
+                <span>Status</span
+                ><b class="danger-text"
+                  >Interfered — range &amp; speed cut ({{ picked.interference }}t left)</b
+                >
+              </div>
+              <div
+                v-if="['router', 'switch', 'wireless', 'firewall'].includes(picked.kind)"
+                class="stat"
               >
-            </div>
-            <div v-if="picked.kind === 'firewall'" class="device-upgrades">
-              <button @click="setGame(cycleFirewallRule(game!, picked!.id))">
-                Block rule <b>{{ picked.firewallRule ?? 'None' }}</b>
+                <span>Queue</span
+                ><b :class="{ 'danger-text': queueDepth(picked.id) > 0 }"
+                  >{{ queueDepth(picked.id) }} waiting</b
+                >
+              </div>
+              <div v-if="picked.kind === 'firewall'" class="device-upgrades">
+                <button @click="setGame(cycleFirewallRule(game!, picked!.id))">
+                  Block rule <b>{{ picked.firewallRule ?? 'None' }}</b>
+                </button>
+              </div>
+              <div v-if="['router', 'switch'].includes(picked.kind)" class="device-upgrades">
+                <button
+                  :disabled="game.budget < 50"
+                  @click="setGame(upgradeDevicePorts(game!, picked!.id))"
+                >
+                  +2 Ports <b :class="{ 'danger-text': game.budget < 50 }">$50</b></button
+                ><button
+                  :disabled="game.budget < FORWARDING_SPEED_COSTS[picked.kind]!"
+                  @click="setGame(upgradeDeviceSpeed(game!, picked!.id))"
+                >
+                  Throughput +{{ FORWARDING_SPEED_GAIN[picked.kind] }} pkt/tick
+                  <b :class="{ 'danger-text': game.budget < FORWARDING_SPEED_COSTS[picked.kind]! }"
+                    >${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b
+                  >
+                </button>
+              </div>
+              <div v-if="picked.kind === 'wireless'" class="device-upgrades">
+                <button
+                  :disabled="wifiInfo(picked)!.cost >= 999 || game.budget < wifiInfo(picked)!.cost"
+                  @click="setGame(upgradeWifi(game!, picked!.id))"
+                >
+                  Upgrade Wi-Fi
+                  <b
+                    :class="{
+                      'danger-text':
+                        wifiInfo(picked)!.cost < 999 && game.budget < wifiInfo(picked)!.cost,
+                    }"
+                    >{{ wifiInfo(picked)!.cost >= 999 ? 'MAX' : '$' + wifiInfo(picked)!.cost }}</b
+                  >
+                </button>
+                <button
+                  :disabled="game.budget < FORWARDING_SPEED_COSTS[picked.kind]!"
+                  @click="setGame(upgradeDeviceSpeed(game!, picked!.id))"
+                >
+                  Throughput +{{ FORWARDING_SPEED_GAIN[picked.kind] }} pkt/tick
+                  <b :class="{ 'danger-text': game.budget < FORWARDING_SPEED_COSTS[picked.kind]! }"
+                    >${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b
+                  >
+                </button>
+              </div>
+              <button
+                v-if="picked.health < 100"
+                class="wide"
+                :disabled="game.budget < 40"
+                @click="setGame(repairDevice(game!, picked!.id))"
+              >
+                <Wrench /> Field repair ·
+                <span :class="{ 'danger-text': game.budget < 40 }">$40</span></button
+              ><button
+                v-if="!['cloud', 'phone', 'tablet'].includes(picked.kind)"
+                class="primary wide"
+                @click="beginCable(picked.id)"
+              >
+                <CableIcon />{{ cableStart === picked.id ? 'Choose destination…' : 'Begin cable' }}
               </button>
-            </div>
-            <div v-if="['router', 'switch'].includes(picked.kind)" class="device-upgrades">
-              <button @click="setGame(upgradeDevicePorts(game!, picked!.id))">
-                +2 Ports <b>$50</b></button
-              ><button @click="setGame(upgradeDeviceSpeed(game!, picked!.id))">
-                Faster forwarding <b>${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b>
+              <button
+                v-if="cableStart === picked.id"
+                class="wide"
+                @click="cableStyle = cableStyle === 'rightAngle' ? 'diagonal' : 'rightAngle'"
+              >
+                Style ·
+                <b>{{ cableStyle === 'rightAngle' ? 'Right-angle' : 'Diagonal' }}</b>
               </button>
-            </div>
-            <div v-if="picked.kind === 'wireless'" class="device-upgrades">
-              <button @click="setGame(upgradeWifi(game!, picked!.id))">
-                Upgrade Wi-Fi
-                <b>{{ wifiInfo(picked)!.cost >= 999 ? 'MAX' : '$' + wifiInfo(picked)!.cost }}</b>
+              <button
+                v-if="deviceRemovalRefund(picked) > 0"
+                class="wide danger-action"
+                @click="removeSelectedDevice"
+              >
+                <Trash2 /> Remove equipment · +${{ deviceRemovalRefund(picked) }}
               </button>
-              <button @click="setGame(upgradeDeviceSpeed(game!, picked!.id))">
-                Faster forwarding <b>${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b>
+              <p class="hint">
+                Drag this device to rearrange the diagram. Wireless-only clients join automatically
+                inside a Wi-Fi zone.
+              </p></template
+            ><template v-else-if="pickedCable"
+              ><h2>
+                {{ game.devices.find((d) => d.id === pickedCable!.from)?.label }} ↔
+                {{ game.devices.find((d) => d.id === pickedCable!.to)?.label }}
+              </h2>
+              <div class="stat">
+                <span>Tier</span><b>{{ pickedCable.tier }}</b>
+              </div>
+              <div class="stat">
+                <span>Traffic</span><b>{{ pickedCable.load }} / {{ pickedCable.capacity }} pkt</b>
+              </div>
+              <div class="stat">
+                <span>Status</span><b>{{ pickedCable.status }}</b>
+              </div>
+              <div class="stat">
+                <span>Age</span><b>{{ pickedCable.age }} ticks</b>
+              </div>
+              <div class="stat">
+                <span>Style</span
+                ><b>{{ pickedCable.style === 'diagonal' ? 'Diagonal' : 'Right-angle' }}</b>
+              </div>
+              <button class="wide" @click="setGame(cycleCableVlan(game!, pickedCable!.id))">
+                VLAN · {{ pickedCable.vlan ?? 'Untagged' }}
               </button>
-            </div>
-            <button
-              v-if="picked.health < 100"
-              class="wide"
-              @click="setGame(repairDevice(game!, picked!.id))"
+              <button
+                v-if="
+                  CABLE_TIERS.findIndex((t) => t.name === pickedCable!.tier) <
+                  CABLE_TIERS.length - 1
+                "
+                class="primary wide"
+                :disabled="game.budget < cableUpgradeCost"
+                @click="setGame(upgradeCable(game!, pickedCable!.id))"
+              >
+                <Zap /> Upgrade ·
+                <span :class="{ 'danger-text': game.budget < cableUpgradeCost }"
+                  >${{ cableUpgradeCost }}</span
+                ></button
+              ><button
+                class="wide"
+                :class="{ primary: reroutingCable?.movingFromEnd === true }"
+                @click="startReroute(true)"
+              >
+                <span class="icon-badge"><CableIcon /><i>A</i></span
+                >{{
+                  reroutingCable?.movingFromEnd === true
+                    ? 'Choose new start…'
+                    : `Reroute start (${game.devices.find((d) => d.id === pickedCable!.from)?.label})`
+                }}</button
+              ><button
+                class="wide"
+                :class="{ primary: reroutingCable?.movingFromEnd === false }"
+                @click="startReroute(false)"
+              >
+                <span class="icon-badge"><CableIcon /><i>Z</i></span
+                >{{
+                  reroutingCable?.movingFromEnd === false
+                    ? 'Choose new end…'
+                    : `Reroute end (${game.devices.find((d) => d.id === pickedCable!.to)?.label})`
+                }}</button
+              ><button class="wide danger-action" @click="deleteSelectedCable">
+                <Trash2 /> Delete · salvage 90%
+              </button></template
             >
-              <Wrench /> Field repair · $40</button
-            ><button
-              v-if="!['cloud', 'phone', 'tablet'].includes(picked.kind)"
-              class="primary wide"
-              @click="beginCable(picked.id)"
-            >
-              <CableIcon />{{ cableStart === picked.id ? 'Choose destination…' : 'Begin cable' }}
-            </button>
-            <button
-              v-if="cableStart === picked.id"
-              class="wide"
-              @click="cableStyle = cableStyle === 'rightAngle' ? 'diagonal' : 'rightAngle'"
-            >
-              Style ·
-              <b>{{ cableStyle === 'rightAngle' ? 'Right-angle' : 'Diagonal' }}</b>
-            </button>
-            <button
-              v-if="deviceRemovalRefund(picked) > 0"
-              class="wide danger-action"
-              @click="removeSelectedDevice"
-            >
-              <Trash2 /> Remove equipment · +${{ deviceRemovalRefund(picked) }}
-            </button>
-            <p class="hint">
-              Drag this device to rearrange the diagram. Wireless-only clients join automatically
-              inside a Wi-Fi zone.
-            </p></template
-          ><template v-else-if="pickedCable"
-            ><p class="overline">CONNECTION</p>
-            <h2>
-              {{ game.devices.find((d) => d.id === pickedCable!.from)?.label }} ↔
-              {{ game.devices.find((d) => d.id === pickedCable!.to)?.label }}
-            </h2>
-            <div class="stat">
-              <span>Tier</span><b>{{ pickedCable.tier }}</b>
-            </div>
-            <div class="stat">
-              <span>Traffic</span><b>{{ pickedCable.load }} / {{ pickedCable.capacity }} pkt</b>
-            </div>
-            <div class="stat">
-              <span>Status</span><b>{{ pickedCable.status }}</b>
-            </div>
-            <div class="stat">
-              <span>Age</span><b>{{ pickedCable.age }} ticks</b>
-            </div>
-            <div class="stat">
-              <span>Style</span
-              ><b>{{ pickedCable.style === 'diagonal' ? 'Diagonal' : 'Right-angle' }}</b>
-            </div>
-            <button class="wide" @click="setGame(cycleCableVlan(game!, pickedCable!.id))">
-              VLAN · {{ pickedCable.vlan ?? 'Untagged' }}
-            </button>
-            <button
-              v-if="
-                CABLE_TIERS.findIndex((t) => t.name === pickedCable!.tier) < CABLE_TIERS.length - 1
-              "
-              class="primary wide"
-              @click="setGame(upgradeCable(game!, pickedCable!.id))"
-            >
-              <Zap /> Upgrade · ${{
-                CABLE_TIERS[CABLE_TIERS.findIndex((t) => t.name === pickedCable!.tier)].cost
-              }}</button
-            ><button
-              class="wide"
-              :class="{ primary: reroutingCable?.movingFromEnd === true }"
-              @click="startReroute(true)"
-            >
-              <CableIcon />{{
-                reroutingCable?.movingFromEnd === true
-                  ? 'Choose new start…'
-                  : `Reroute start (${game.devices.find((d) => d.id === pickedCable!.from)?.label})`
-              }}</button
-            ><button
-              class="wide"
-              :class="{ primary: reroutingCable?.movingFromEnd === false }"
-              @click="startReroute(false)"
-            >
-              <CableIcon />{{
-                reroutingCable?.movingFromEnd === false
-                  ? 'Choose new end…'
-                  : `Reroute end (${game.devices.find((d) => d.id === pickedCable!.to)?.label})`
-              }}</button
-            ><button class="wide danger-action" @click="deleteSelectedCable">
-              <Trash2 /> Delete · salvage 90%
-            </button></template
-          >
+          </div>
         </aside>
         <div class="events">
           <div><Activity /> LIVE EVENTS</div>
@@ -742,7 +893,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         ><span
           >Tick {{ game.tick }} · Load {{ game.rate.toFixed(2) }}× ·
           {{ game.devices.length }} devices</span
-        ><button @click="game.speed = game.speed === 1 ? 2 : 1">{{ game.speed }}× SPEED</button
+        ><button @click="cycleSpeed">{{ game.speed }}× SPEED</button
         ><button @click="modal = 'stats'">RUN STATS</button>
       </footer>
     </div>
@@ -756,214 +907,230 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
     />
     <div v-if="modal" class="modal-backdrop" @mousedown.self="modal = null">
       <div class="modal">
-        <button class="close" @click="modal = null"><X /></button
-        ><template v-if="modal === 'help'"
-          ><p class="overline">HOW TO PLAY</p>
-          <h1>Route every packet.</h1>
-          <div class="help-tabs">
-            <button
-              v-for="section in HELP_SECTIONS"
-              :key="section"
-              :class="{ primary: helpSection === section }"
-              @click="helpSection = section"
-            >
-              {{ section }}
-            </button>
-          </div>
-          <div v-if="helpSection === 'Basics'">
-            <ol>
-              <li>Select equipment and choose <b>Begin cable</b>, then tap its destination.</li>
-              <li>
-                Toggle <b>Style</b> (Right-angle / Diagonal) before choosing a destination if the
-                auto-router gets crowded.
-              </li>
-              <li>
-                Select an existing cable and use <b>Reroute start/end</b> to move an endpoint
-                without losing its tier, VLAN, or upgrades.
-              </li>
-              <li>Drag any device to reposition it — useful for shifting Wi-Fi coverage.</li>
-              <li>Pan by dragging empty canvas; zoom with the scroll wheel or the +/− buttons.</li>
-              <li>
-                Only the <b>router</b> may connect to the Cloud Edge, and two end devices can never
-                link directly — equipment must sit between them.
-              </li>
-            </ol>
-          </div>
-          <div v-else-if="helpSection === 'Devices & Wi-Fi'">
-            <ol>
-              <li>
-                Phones and tablets are <b>Wi-Fi only</b>. PCs, TVs, and consoles keep a wired port
-                but can also join Wi-Fi coverage as a backup route.
-              </li>
-              <li>
-                A client in range of two overlapping access points prefers whichever has fewer
-                clients right now, not just the nearest one.
-              </li>
-              <li>
-                Access points have one wired uplink port, plus two independent upgrades: Wi-Fi
-                generation (range + base speed) and Faster forwarding (+2 pkt/tick, stacks on top).
-              </li>
-              <li>
-                Forwarding devices admit realtime traffic first, then stream, then bulk — a
-                congested router drops bulk packets before it touches a phone's.
-              </li>
-              <li>
-                Wi-Fi interference can randomly cut an access point's range and speed for 8–18
-                ticks; it clears on its own.
-              </li>
-              <li>
-                Equipment can wear down and fail outright in harder scenarios — an offline device
-                blinks on the canvas. Field repair ($40) restores health but not wear.
-              </li>
-            </ol>
-          </div>
-          <div v-else-if="helpSection === 'Scoring & economy'">
-            <ol>
-              <li>
-                Delivering a packet scores <b>10 × score multiplier × combo</b>; the multiplier
-                rises every 90 ticks.
-              </li>
-              <li>
-                5 clean ticks in a row (no drops) raises your combo up to 5×; 3+ drops in one tick
-                resets it.
-              </li>
-              <li>
-                A delivery with a genuine second independent route to its destination scores +5
-                bonus — redundancy pays.
-              </li>
-              <li>
-                Delivery milestones and a game-over network-health bonus (surviving devices ×
-                lifetime delivery ratio) add extra score/budget on top.
-              </li>
-              <li>
-                Removing equipment or a cable refunds 90% of what you spent on it, including
-                upgrades.
-              </li>
-              <li>
-                <b>Site Upgrades</b> (top bar) bulk-upgrade cable tiers, ports, or throughput across
-                the whole network for 15% less than one at a time.
-              </li>
-            </ol>
-          </div>
-          <div v-else>
-            <ol>
-              <li>
-                Orange links are over capacity — upgrade the cable or add a parallel route before it
-                fails.
-              </li>
-              <li>
-                Failure pressure is the share of packets dropped across the last 20 ticks; the run
-                ends once it's sustained above 30 drops past the scenario's early grace period.
-              </li>
-              <li>
-                Challenge events roll periodically: traffic spikes, budget bonuses, device surges,
-                and — in harder scenarios — outright equipment failure.
-              </li>
-              <li>
-                At game over you can <b>Try again</b> or <b>Continue unscored</b> to keep playing
-                without further leaderboard scoring.
-              </li>
-              <li>
-                Watch <b>Jackie</b> (bottom of the canvas) — it always surfaces the single most
-                urgent thing to fix right now.
-              </li>
-              <li>Every completed run is saved to your local Leaderboard, win or lose.</li>
-            </ol>
-          </div></template
-        ><template v-else-if="modal === 'upgrades'"
-          ><p class="overline">SITE UPGRADES</p>
-          <h1>Upgrade the whole network.</h1>
-          <p>Bulk upgrades cost less per component and apply instantly.</p>
-          <div class="upgrade-list">
-            <div class="upgrade-picker">
-              <label for="cable-upgrade-target"><CableIcon /> Connection rollout target</label>
-              <select id="cable-upgrade-target" v-model="cableUpgradeTarget">
-                <option v-for="tier in CABLE_TIERS.slice(1)" :key="tier.name" :value="tier.name">
-                  {{ tier.name }} · {{ TIER_SPEED_LABEL[tier.name] }}
-                </option>
-              </select>
+        <div class="modal-titlebar">
+          <span>{{ modalTitle }}</span
+          ><button class="close" @click="modal = null"><X /></button>
+        </div>
+        <div class="modal-body">
+          <template v-if="modal === 'help'"
+            ><p class="overline">HOW TO PLAY</p>
+            <h1>Route every packet.</h1>
+            <div class="help-tabs">
+              <button
+                v-for="section in HELP_SECTIONS"
+                :key="section"
+                :class="{ primary: helpSection === section }"
+                @click="helpSection = section"
+              >
+                {{ section }}
+              </button>
             </div>
-            <button @click="setGame(upgradeAllCables(game!, cableUpgradeTarget))">
-              <span
-                ><CableIcon /><b>Upgrade to {{ cableUpgradeTarget }}</b
-                ><small>
-                  {{ siteCableUpgradeTargets(game!, cableUpgradeTarget).length }} link(s) below
-                  {{ TIER_SPEED_LABEL[cableUpgradeTarget] }}</small
-                ></span
-              ><strong
-                >${{
-                  siteDiscountedCost(siteCableUpgradeFullCost(game!, cableUpgradeTarget))
-                }}</strong
+            <div v-if="helpSection === 'Basics'">
+              <ol>
+                <li>
+                  Pick equipment from the <b>BUILD</b> panel to arm it, then click the canvas to
+                  place it — the tool stays armed for placing several; click it again or press
+                  <b>Esc</b> to put it away.
+                </li>
+                <li>Select equipment and choose <b>Begin cable</b>, then tap its destination.</li>
+                <li>
+                  Toggle <b>Style</b> (Right-angle / Diagonal) before choosing a destination if the
+                  auto-router gets crowded.
+                </li>
+                <li>
+                  Select an existing cable and use <b>Reroute start/end</b> to move an endpoint
+                  without losing its tier, VLAN, or upgrades.
+                </li>
+                <li>Drag any device to reposition it — useful for shifting Wi-Fi coverage.</li>
+                <li>
+                  Pan by dragging empty canvas; zoom with the scroll wheel or the +/− buttons.
+                </li>
+                <li>
+                  Only the <b>router</b> may connect to the Cloud Edge, and two end devices can
+                  never link directly — equipment must sit between them.
+                </li>
+              </ol>
+            </div>
+            <div v-else-if="helpSection === 'Devices & Wi-Fi'">
+              <ol>
+                <li>
+                  Phones and tablets are <b>Wi-Fi only</b>. PCs, TVs, and consoles keep a wired port
+                  but can also join Wi-Fi coverage as a backup route.
+                </li>
+                <li>
+                  A client in range of two overlapping access points prefers whichever has fewer
+                  clients right now, not just the nearest one.
+                </li>
+                <li>
+                  Access points have one wired uplink port, plus two independent upgrades: Wi-Fi
+                  generation (range + base speed) and Faster forwarding (+2 pkt/tick, stacks on
+                  top).
+                </li>
+                <li>
+                  Forwarding devices admit realtime traffic first, then stream, then bulk — a
+                  congested router drops bulk packets before it touches a phone's.
+                </li>
+                <li>
+                  Wi-Fi interference can randomly cut an access point's range and speed for 8–18
+                  ticks; it clears on its own.
+                </li>
+                <li>
+                  Equipment can wear down and fail outright in harder scenarios — an offline device
+                  blinks on the canvas. Field repair ($40) restores health but not wear.
+                </li>
+              </ol>
+            </div>
+            <div v-else-if="helpSection === 'Scoring & economy'">
+              <ol>
+                <li>
+                  Delivering a packet scores <b>10 × score multiplier × combo</b>; the multiplier
+                  rises every 90 ticks.
+                </li>
+                <li>
+                  5 clean ticks in a row (no drops) raises your combo up to 5×; 3+ drops in one tick
+                  resets it.
+                </li>
+                <li>
+                  A delivery with a genuine second independent route to its destination scores +5
+                  bonus — redundancy pays.
+                </li>
+                <li>
+                  Delivery milestones and a game-over network-health bonus (surviving devices ×
+                  lifetime delivery ratio) add extra score/budget on top.
+                </li>
+                <li>
+                  Removing equipment or a cable refunds 90% of what you spent on it, including
+                  upgrades.
+                </li>
+                <li>
+                  <b>Site Upgrades</b> (top bar) bulk-upgrade cable tiers, ports, or throughput
+                  across the whole network for 15% less than one at a time.
+                </li>
+              </ol>
+            </div>
+            <div v-else>
+              <ol>
+                <li>
+                  Orange links are over capacity — upgrade the cable or add a parallel route before
+                  it fails.
+                </li>
+                <li>
+                  Failure pressure is the share of packets dropped across the last 20 ticks; the run
+                  ends once it's sustained above 30 drops past the scenario's early grace period.
+                </li>
+                <li>
+                  Challenge events roll periodically: traffic spikes, budget bonuses, device surges,
+                  and — in harder scenarios — outright equipment failure.
+                </li>
+                <li>
+                  At game over you can <b>Try again</b> or <b>Continue unscored</b> to keep playing
+                  without further leaderboard scoring.
+                </li>
+                <li>
+                  Watch <b>Jackie</b> (bottom of the canvas) — it always surfaces the single most
+                  urgent thing to fix right now.
+                </li>
+                <li>Every completed run is saved to your local Leaderboard, win or lose.</li>
+              </ol>
+            </div></template
+          ><template v-else-if="modal === 'upgrades'"
+            ><p class="overline">SITE UPGRADES</p>
+            <h1>Upgrade the whole network.</h1>
+            <p>Bulk upgrades cost less per component and apply instantly.</p>
+            <div class="upgrade-list">
+              <div class="upgrade-picker">
+                <label for="cable-upgrade-target"><CableIcon /> Connection rollout target</label>
+                <select id="cable-upgrade-target" v-model="cableUpgradeTarget">
+                  <option v-for="tier in CABLE_TIERS.slice(1)" :key="tier.name" :value="tier.name">
+                    {{ tier.name }} · {{ TIER_SPEED_LABEL[tier.name] }}
+                  </option>
+                </select>
+              </div>
+              <button
+                :disabled="game.budget < siteCableCost"
+                @click="setGame(upgradeAllCables(game!, cableUpgradeTarget))"
               >
-            </button>
-            <button @click="setGame(upgradeAllPorts(game!))">
-              <span
-                ><Network /><b>Port expansion</b
-                ><small>Add 2 ports to every router and switch</small></span
-              ><strong
-                >${{
-                  siteDiscountedCost(
-                    game!.devices.filter((d) => ['router', 'switch'].includes(d.kind)).length * 50,
-                  )
-                }}</strong
-              >
-            </button>
-            <button @click="setGame(upgradeAllSwitchSpeed(game!))">
-              <span><Zap /><b>Switch throughput</b><small>+4 pkt/tick on every switch</small></span
-              ><strong
-                >${{
-                  siteDiscountedCost(game!.devices.filter((d) => d.kind === 'switch').length * 60)
-                }}</strong
-              >
-            </button>
-          </div></template
-        ><template v-else-if="modal === 'stats'"
-          ><p class="overline">RUN TELEMETRY</p>
-          <h1>{{ game?.delivered }} packets delivered</h1>
-          <div class="stat">
-            <span>Score / multiplier</span
-            ><b>{{ game?.score.toLocaleString() }} · {{ game?.multiplier }}×</b>
-          </div>
-          <div class="stat">
-            <span>Delivered / dropped</span><b>{{ game?.delivered }} / {{ game?.dropped }}</b>
-          </div>
-          <div class="stat">
-            <span>Clean combo</span><b>{{ game?.combo }}×</b>
-          </div>
-          <div class="stat">
-            <span>Recent drop window</span
-            ><b>{{ game?.recentDrops.reduce((a, b) => a + b, 0) }} / 30</b>
-          </div>
-          <div class="stat">
-            <span>Traffic ramp</span><b>{{ game?.rate.toFixed(2) }}×</b>
-          </div>
-          <div class="stat">
-            <span>Avg. delivery latency</span><b>{{ game?.recentLatencyTicks.toFixed(1) }} ticks</b>
-          </div>
-          <div class="stat">
-            <span>Avg. queue delay</span><b>{{ game?.recentQueueDelayTicks.toFixed(1) }} ticks</b>
-          </div>
-          <button class="wide" @click="modal = 'leaderboard'">View leaderboard</button></template
-        ><template v-else-if="modal === 'leaderboard'"
-          ><p class="overline">PERSONAL LEADERBOARD</p>
-          <h1>Top {{ LEADERBOARD_SIZE }} runs</h1>
-          <p v-if="!leaderboard.length" class="hint">
-            No completed runs yet. Finish a network to set your first score.
-          </p>
-          <ol v-else class="leaderboard-list">
-            <li v-for="(entry, i) in leaderboard" :key="entry.id">
-              <span class="rank">#{{ i + 1 }}</span>
-              <span class="leaderboard-meta">
-                <b>{{ entry.score.toLocaleString() }}</b>
-                <small
-                  >{{ SCENARIOS.find((s) => s.id === entry.scenario)?.name ?? entry.scenario }} ·
-                  {{ entry.delivered }} delivered · {{ entry.tick }} ticks ·
-                  {{ new Date(entry.completedAt).toLocaleDateString() }}</small
+                <span
+                  ><CableIcon /><b>Upgrade to {{ cableUpgradeTarget }}</b
+                  ><small>
+                    {{ siteCableUpgradeTargets(game!, cableUpgradeTarget).length }} link(s) below
+                    {{ TIER_SPEED_LABEL[cableUpgradeTarget] }}</small
+                  ></span
+                ><strong :class="{ 'danger-text': game.budget < siteCableCost }"
+                  >${{ siteCableCost }}</strong
                 >
-              </span>
-            </li>
-          </ol></template
-        >
+              </button>
+              <button
+                :disabled="game.budget < sitePortCost"
+                @click="setGame(upgradeAllPorts(game!))"
+              >
+                <span
+                  ><Network /><b>Port expansion</b
+                  ><small>Add 2 ports to every router and switch</small></span
+                ><strong :class="{ 'danger-text': game.budget < sitePortCost }"
+                  >${{ sitePortCost }}</strong
+                >
+              </button>
+              <button
+                :disabled="game.budget < siteSwitchSpeedCost"
+                @click="setGame(upgradeAllSwitchSpeed(game!))"
+              >
+                <span
+                  ><Zap /><b>Switch throughput</b><small>+4 pkt/tick on every switch</small></span
+                ><strong :class="{ 'danger-text': game.budget < siteSwitchSpeedCost }"
+                  >${{ siteSwitchSpeedCost }}</strong
+                >
+              </button>
+            </div></template
+          ><template v-else-if="modal === 'stats'"
+            ><p class="overline">RUN TELEMETRY</p>
+            <h1>{{ game?.delivered }} packets delivered</h1>
+            <div class="stat">
+              <span>Score / multiplier</span
+              ><b>{{ game?.score.toLocaleString() }} · {{ game?.multiplier }}×</b>
+            </div>
+            <div class="stat">
+              <span>Delivered / dropped</span><b>{{ game?.delivered }} / {{ game?.dropped }}</b>
+            </div>
+            <div class="stat">
+              <span>Clean combo</span><b>{{ game?.combo }}×</b>
+            </div>
+            <div class="stat">
+              <span>Recent drop window</span
+              ><b>{{ game?.recentDrops.reduce((a, b) => a + b, 0) }} / 30</b>
+            </div>
+            <div class="stat">
+              <span>Traffic ramp</span><b>{{ game?.rate.toFixed(2) }}×</b>
+            </div>
+            <div class="stat">
+              <span>Avg. delivery latency</span
+              ><b>{{ game?.recentLatencyTicks.toFixed(1) }} ticks</b>
+            </div>
+            <div class="stat">
+              <span>Avg. queue delay</span><b>{{ game?.recentQueueDelayTicks.toFixed(1) }} ticks</b>
+            </div>
+            <button class="wide" @click="modal = 'leaderboard'">View leaderboard</button></template
+          ><template v-else-if="modal === 'leaderboard'"
+            ><p class="overline">PERSONAL LEADERBOARD</p>
+            <h1>Top {{ LEADERBOARD_SIZE }} runs</h1>
+            <p v-if="!leaderboard.length" class="hint">
+              No completed runs yet. Finish a network to set your first score.
+            </p>
+            <ol v-else class="leaderboard-list">
+              <li v-for="(entry, i) in leaderboard" :key="entry.id">
+                <span class="rank">#{{ i + 1 }}</span>
+                <span class="leaderboard-meta">
+                  <b>{{ entry.score.toLocaleString() }}</b>
+                  <small
+                    >{{ SCENARIOS.find((s) => s.id === entry.scenario)?.name ?? entry.scenario }} ·
+                    {{ entry.delivered }} delivered · {{ entry.tick }} ticks ·
+                    {{ new Date(entry.completedAt).toLocaleDateString() }}</small
+                  >
+                </span>
+              </li>
+            </ol></template
+          >
+        </div>
       </div>
     </div>
   </main>

@@ -22,8 +22,11 @@ to survive and score as long as possible against ever-increasing traffic.
 - **Select** a device or cable — tap/click it. Its inspector opens on the
   right with live stats and available actions.
 - **Build** — pick equipment from the BUILD panel on the left (Switch,
-  Router, Wireless, Firewall, Server) and pay its cost from your budget. New
-  equipment drops in unconnected; drag it into position.
+  Router, Wireless, Firewall, Server) to arm it, then click anywhere on the
+  canvas to stamp it down there and pay its cost from your budget. The tool
+  stays armed for placing several at once; click its button again or press
+  **Esc** to put it away. New equipment drops in unconnected; drag it to
+  reposition afterward.
 - **Connect devices** — select a device, choose **Begin cable**, then tap the
   destination device. Before confirming, you can toggle the cable's **Style**
   between _Right-angle_ (auto-routed around other equipment) and _Diagonal_
@@ -36,7 +39,7 @@ to survive and score as long as possible against ever-increasing traffic.
   devices.
 - **Delete** a cable, or **Remove equipment**, from its inspector. You get a
   90% salvage refund on removal (see §7).
-- **Pause / Resume** and **1×/2× speed** are in the HUD.
+- **Pause / Resume** and a **0.5×/1×/2×/3× speed** cycle are in the HUD.
 - **Pan** by dragging empty canvas space; **zoom** with the scroll wheel or
   the +/−/Reset buttons docked on the minimap panel.
 - **Site Upgrades** (top bar) applies a bulk upgrade to every eligible piece

@@ -13,10 +13,17 @@ const emit = defineEmits<{
   openHelp: []
   exitToMenu: []
   togglePause: []
+  openLeaderboard: []
 }>()
 </script>
 
 <template>
+  <div class="menu-bar">
+    <button @click="emit('exitToMenu')">File</button><button @click="dark = !dark">View</button
+    ><button @click="emit('openUpgrades')">Network</button
+    ><button @click="emit('openLeaderboard')">Scores</button
+    ><button @click="emit('openHelp')">Help</button>
+  </div>
   <header class="topbar">
     <div class="brand small">
       <Network /><span>NETWORK<span>MASTER</span></span>
@@ -49,7 +56,12 @@ const emit = defineEmits<{
       <span
         >Failure pressure <b>{{ Math.round(game.failure) }}%</b></span
       >
-      <div><i :style="{ width: game.failure + '%' }" /></div>
+      <div>
+        <i
+          :class="{ warn: game.failure >= 50 && game.failure < 85, over: game.failure >= 85 }"
+          :style="{ width: game.failure + '%' }"
+        />
+      </div>
     </div>
     <button class="pause" @click="emit('togglePause')">
       <CirclePause v-if="game.phase === 'playing'" /><CirclePlay v-else />{{

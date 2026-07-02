@@ -3,10 +3,10 @@ import { simulate } from '../game'
 import type { GameState } from '../types'
 
 /**
- * Drives the 800ms (or 400ms at 2x speed) simulation tick and the
- * requestAnimationFrame clock used to smoothly interpolate packet positions
- * between discrete ticks. Owns its own timers; call once from the root
- * component's setup so `onMounted`/`onBeforeUnmount` register correctly.
+ * Drives the simulation tick — 800ms at 1x, scaled by `game.speed` (0.5x-3x)
+ * — and the requestAnimationFrame clock used to smoothly interpolate packet
+ * positions between discrete ticks. Owns its own timers; call once from the
+ * root component's setup so `onMounted`/`onBeforeUnmount` register correctly.
  */
 export function useSimulationClock(game: Ref<GameState | null>, screen: Ref<'menu' | 'game'>) {
   let simulationTimer: number | undefined

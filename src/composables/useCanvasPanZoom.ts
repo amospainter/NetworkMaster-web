@@ -1,16 +1,18 @@
 import { computed, ref, type Ref } from 'vue'
+import type { DeviceKind } from '../types'
 
 const ZOOM_MIN = 0.6
 const ZOOM_MAX = 2.5
 
 /**
  * Wheel-to-zoom / drag-to-pan state for the topology canvas. Pan is ignored
- * while a cable is being drawn or rerouted, since those interactions repurpose
- * pointer drags for a different purpose.
+ * while a cable is being drawn/rerouted or a build tool is armed, since those
+ * interactions repurpose pointer drags for a different purpose.
  */
 export function useCanvasPanZoom(
   cableStart: Ref<string | null>,
   reroutingCable: Ref<{ cableId: string; movingFromEnd: boolean } | null>,
+  placingKind: Ref<DeviceKind | null>,
 ) {
   const zoom = ref(1)
   const panX = ref(0)
@@ -20,9 +22,9 @@ export function useCanvasPanZoom(
   )
   let activePan: { startX: number; startY: number; originX: number; originY: number } | null = null
 
-  /** Starts a background drag-to-pan; ignored while drawing/rerouting a cable. */
+  /** Starts a background drag-to-pan; ignored while drawing/rerouting a cable or placing equipment. */
   function startCanvasPan(event: PointerEvent) {
-    if (cableStart.value || reroutingCable.value) return
+    if (cableStart.value || reroutingCable.value || placingKind.value) return
     activePan = {
       startX: event.clientX,
       startY: event.clientY,

@@ -74,7 +74,7 @@ const emit = defineEmits<{
       </div>
     </section>
     <footer class="menu-footer">
-      <span>NO ACCOUNT · NO CLOUD · YOUR NETWORK STAYS YOURS</span><span>VUE 3 · v0.1.0</span>
+      <span>NO ACCOUNT · NO CLOUD · YOUR NETWORK STAYS YOURS</span>
     </footer>
     <footer class="menu-footer legal-footer">
       <span
