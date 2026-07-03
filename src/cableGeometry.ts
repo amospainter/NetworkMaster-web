@@ -1,19 +1,41 @@
 import type { Cable, Device } from './types'
 
+/** A point in the canvas's normalized 0–100 coordinate system. */
 export type CanvasPoint = { x: number; y: number }
+/** Render-ready polyline associated with one persisted cable. */
 export type CableRoute = { cableId: string; points: CanvasPoint[] }
 
 type Segment = { start: CanvasPoint; end: CanvasPoint }
 
 const DEVICE_HALF_WIDTH = 4.5
 const DEVICE_HALF_HEIGHT = 6
+/** Preferred offsets from the midpoint lane, evaluated from least to most displaced. */
 const LANE_OFFSETS = [0, -4, 4, -8, 8]
 
+/**
+ * Converts consecutive polyline points into independently measurable segments.
+ *
+ * @param points - Ordered points in a cable polyline.
+ * @returns One segment for every adjacent pair of points.
+ */
 const segmentsFor = (points: CanvasPoint[]): Segment[] =>
   points.slice(1).map((end, index) => ({ start: points[index], end }))
 
+/**
+ * Returns the Euclidean length of one route segment.
+ *
+ * @param segment - Segment whose length should be measured.
+ * @returns The segment length in normalized canvas units.
+ */
 const segmentLength = ({ start, end }: Segment) => Math.hypot(end.x - start.x, end.y - start.y)
 
+/**
+ * Tests an orthogonal segment against the approximate visual bounds of a device.
+ *
+ * @param segment - Orthogonal cable segment to test.
+ * @param device - Device whose canvas footprint acts as an obstacle.
+ * @returns Whether the segment intersects the device footprint.
+ */
 function segmentCrossesDevice(segment: Segment, device: Device): boolean {
   const left = device.x - DEVICE_HALF_WIDTH
   const right = device.x + DEVICE_HALF_WIDTH
@@ -29,6 +51,13 @@ function segmentCrossesDevice(segment: Segment, device: Device): boolean {
   return segment.start.y >= top && segment.start.y <= bottom && maxX >= left && minX <= right
 }
 
+/**
+ * Measures collinear overlap between two segments.
+ *
+ * @param first - First orthogonal segment.
+ * @param second - Second orthogonal segment.
+ * @returns Shared length, or zero for non-collinear segments.
+ */
 function sharedLength(first: Segment, second: Segment): number {
   const firstVertical = first.start.x === first.end.x
   const secondVertical = second.start.x === second.end.x
@@ -49,6 +78,13 @@ function sharedLength(first: Segment, second: Segment): number {
   )
 }
 
+/**
+ * Detects interior orthogonal crossings while ignoring endpoint contact.
+ *
+ * @param first - First segment.
+ * @param second - Second segment.
+ * @returns Whether the segments cross in their interiors.
+ */
 function segmentsCross(first: Segment, second: Segment): boolean {
   const firstVertical = first.start.x === first.end.x
   const secondVertical = second.start.x === second.end.x
@@ -63,6 +99,13 @@ function segmentsCross(first: Segment, second: Segment): boolean {
   )
 }
 
+/**
+ * Produces simple L- and Z-shaped routes around increasingly distant midpoint lanes.
+ *
+ * @param start - Route origin.
+ * @param end - Route destination.
+ * @returns Candidate polylines in preferred evaluation order.
+ */
 function routeCandidates(start: CanvasPoint, end: CanvasPoint): CanvasPoint[][] {
   const middleX = (start.x + end.x) / 2
   const middleY = (start.y + end.y) / 2
@@ -89,6 +132,10 @@ function routeCandidates(start: CanvasPoint, end: CanvasPoint): CanvasPoint[][] 
  *
  * Device collisions are treated as effectively forbidden. Shared cable runs
  * are the next-highest penalty, followed by crossings, bends, and total length.
+ *
+ * @param devices - Devices whose positions define endpoints and obstacles.
+ * @param cables - Persisted cables to route in display order.
+ * @returns A route lookup keyed by cable identifier.
  */
 export function computeCableRoutes(devices: Device[], cables: Cable[]): Map<string, CableRoute> {
   const routes = new Map<string, CableRoute>()
@@ -145,10 +192,22 @@ export function computeCableRoutes(devices: Device[], cables: Cable[]): Map<stri
   return routes
 }
 
+/**
+ * Serializes a route into an SVG path using normalized canvas coordinates.
+ *
+ * @param route - Cable route to serialize.
+ * @returns An SVG path-data string composed of move and line commands.
+ */
 export const routeToSvgPath = (route: CableRoute): string =>
   route.points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
 
-/** Returns a constant-speed position along a multi-segment cable route. */
+/**
+ * Returns a constant-speed position along a multi-segment cable route.
+ *
+ * @param points - Ordered route points.
+ * @param progress - Normalized route progress; values are clamped to 0–1.
+ * @returns The interpolated canvas point.
+ */
 export function pointAlongRoute(points: CanvasPoint[], progress: number): CanvasPoint {
   const segments = segmentsFor(points)
   const totalLength = segments.reduce((total, segment) => total + segmentLength(segment), 0)

@@ -7,20 +7,41 @@ import {
 } from './constants'
 import { distanceBetween } from './utils'
 
-/** Effective Wi-Fi range for a hub, shrunk while it suffers interference. */
+/**
+ * Calculates effective Wi-Fi range for an access point.
+ *
+ * @param hub - Wireless access point to inspect.
+ * @returns Coverage radius in normalized canvas units, reduced during interference.
+ */
 export const hubRange = (hub: Device) =>
   WIFI_STANDARDS[Math.max(0, hub.wifiLevel)].range *
   (hub.interference > 0 ? WIFI_INTERFERENCE_RANGE_FACTOR : 1)
 
-/** Effective Wi-Fi throughput for a hub, halved while it suffers interference. */
+/**
+ * Calculates effective Wi-Fi throughput for an access point.
+ *
+ * @param hub - Wireless access point to inspect.
+ * @returns Current wireless packets-per-tick capacity.
+ */
 export const hubPps = (hub: Device) =>
   Math.max(1, Math.floor(hub.pps * (hub.interference > 0 ? WIFI_INTERFERENCE_PPS_FACTOR : 1)))
 
-/** A forwarding device's effective per-tick admission capacity. */
+/**
+ * Resolves a forwarding device's effective per-tick admission capacity.
+ *
+ * @param device - Forwarding device to inspect.
+ * @returns Wireless-adjusted capacity for access points, otherwise the device PPS value.
+ */
 export const deviceCapacity = (device: Device) =>
   device.kind === 'wireless' ? hubPps(device) : device.pps
 
-/** Counts the wireless-capable clients currently inside a hub's coverage circle. */
+/**
+ * Counts wireless-capable clients currently inside an access point's coverage.
+ *
+ * @param state - Current game state.
+ * @param hub - Access point whose client load should be counted.
+ * @returns Number of online, in-range wireless-capable clients.
+ */
 const wirelessClientLoad = (state: GameState, hub: Device) =>
   state.devices.filter(
     (candidate) =>
@@ -35,6 +56,10 @@ const wirelessClientLoad = (state: GameState, hub: Device) =>
  * preferring the least-loaded hub among those in range so clients spread out
  * across access points instead of piling onto a single one; nearest distance
  * breaks ties between equally loaded hubs.
+ *
+ * @param state - Current game state.
+ * @param wirelessDevice - Client seeking an access point.
+ * @returns The preferred operational access point, or `undefined` when none is in range.
  */
 export const findWirelessHub = (state: GameState, wirelessDevice: Device) =>
   state.devices
@@ -50,12 +75,24 @@ export const findWirelessHub = (state: GameState, wirelessDevice: Device) =>
       return distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice)
     })[0]
 
-/** Returns the access point currently serving a wireless-capable device, if any. */
+/**
+ * Returns the access point currently serving a wireless-capable device.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Identifier of the client to resolve.
+ * @returns The serving access point, or `null` when the client is invalid or uncovered.
+ */
 export function servingWirelessHub(state: GameState, deviceId: string): Device | null {
   const wirelessDevice = state.devices.find((device) => device.id === deviceId)
   if (!wirelessDevice || !WIRELESS_CAPABLE_KINDS.includes(wirelessDevice.kind)) return null
   return findWirelessHub(state, wirelessDevice) ?? null
 }
 
+/**
+ * Returns an access point's current Wi-Fi standard.
+ *
+ * @param device - Device to inspect.
+ * @returns The matching Wi-Fi standard, or `null` for non-wireless devices.
+ */
 export const wifiInfo = (device: Device) =>
   device.kind === 'wireless' ? WIFI_STANDARDS[device.wifiLevel] : null

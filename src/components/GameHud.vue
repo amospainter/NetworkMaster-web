@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { CirclePause, CirclePlay, HelpCircle, Moon, Network, Sun, Zap } from 'lucide-vue-next'
+import {
+  CirclePause,
+  CirclePlay,
+  HelpCircle,
+  Menu,
+  Moon,
+  Network,
+  Sun,
+  X,
+  Zap,
+} from 'lucide-vue-next'
+import { ref } from 'vue'
 import { SCENARIOS } from '../game'
 import type { GameState } from '../types'
 
@@ -7,6 +18,7 @@ defineProps<{
   game: GameState
 }>()
 const dark = defineModel<boolean>('dark', { required: true })
+const mobileMenuOpen = ref(false)
 
 const emit = defineEmits<{
   openUpgrades: []
@@ -15,6 +27,19 @@ const emit = defineEmits<{
   togglePause: []
   openLeaderboard: []
 }>()
+
+/**
+ * Opens a desktop-equivalent destination, then dismisses the mobile overflow menu.
+ *
+ * @param panel - Destination panel to request from the parent component.
+ * @returns Nothing; an event is emitted and local menu state is updated.
+ */
+function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
+  if (panel === 'upgrades') emit('openUpgrades')
+  if (panel === 'help') emit('openHelp')
+  if (panel === 'leaderboard') emit('openLeaderboard')
+  mobileMenuOpen.value = false
+}
 </script>
 
 <template>
@@ -34,6 +59,28 @@ const emit = defineEmits<{
       ><button @click="emit('openHelp')"><HelpCircle /> Help</button
       ><button @click="dark = !dark"><Sun v-if="dark" /><Moon v-else /></button
       ><button @click="emit('exitToMenu')">Exit</button>
+    </div>
+  </header>
+  <header class="mobile-topbar">
+    <div class="brand small">
+      <Network /><span>NETWORK<span>MASTER</span></span>
+    </div>
+    <div class="mobile-top-actions">
+      <button class="mobile-budget" aria-label="Current budget">${{ game.budget }}</button>
+      <button
+        :aria-label="mobileMenuOpen ? 'Close menu' : 'Open menu'"
+        :aria-expanded="mobileMenuOpen"
+        @click="mobileMenuOpen = !mobileMenuOpen"
+      >
+        <X v-if="mobileMenuOpen" /><Menu v-else />
+      </button>
+    </div>
+    <div v-if="mobileMenuOpen" class="mobile-overflow-menu">
+      <button @click="openMobilePanel('upgrades')"><Zap /> Site upgrades</button>
+      <button @click="openMobilePanel('help')"><HelpCircle /> Help</button>
+      <button @click="openMobilePanel('leaderboard')">Scores</button>
+      <button @click="dark = !dark"><Sun v-if="dark" /><Moon v-else /> Theme</button>
+      <button @click="emit('exitToMenu')">Exit to menu</button>
     </div>
   </header>
   <section class="hud">

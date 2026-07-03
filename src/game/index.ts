@@ -4,6 +4,7 @@
  * the test suite may depend on; internals stay in their owning module.
  */
 
+/** Scenario catalogs and shared upgrade constants consumed by the application shell. */
 export {
   CABLE_TIERS,
   FORWARDING_SPEED_COSTS,
@@ -12,14 +13,19 @@ export {
   WIRELESS_CAPABLE_KINDS,
 } from './constants'
 
+/** Run creation, score finalization, and persisted-save migration. */
 export { migrateSavedGame, networkHealthBonus, newGame } from './persistence'
 
+/** Effective wireless capabilities and client-to-access-point resolution. */
 export { deviceCapacity, hubPps, hubRange, servingWirelessHub, wifiInfo } from './wireless'
 
+/** Operational pathfinding and redundancy inspection. */
 export { findRoute, independentPathCount } from './routing'
 
+/** Pure one-tick simulation reducer. */
 export { simulate } from './simulate'
 
+/** Player topology mutations and their validation/economy rules. */
 export {
   addCable,
   buildDevice,
@@ -32,6 +38,7 @@ export {
   rerouteCable,
 } from './topology'
 
+/** Individual and site-wide equipment upgrade operations. */
 export {
   repairDevice,
   siteCableUpgradeFullCost,

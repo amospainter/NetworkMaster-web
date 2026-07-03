@@ -1,3 +1,4 @@
+/** Stable identifiers for every topology node supported by simulation and UI layers. */
 export type DeviceKind =
   | 'cloud'
   | 'router'
@@ -10,6 +11,11 @@ export type DeviceKind =
   | 'server'
   | 'firewall'
   | 'wireless'
+
+/**
+ * Persisted cable upgrade identifiers, ordered separately by `CABLE_TIERS`.
+ * `Copper` is the legacy save value presented to players as “Ethernet”.
+ */
 export type CableTier =
   | 'Copper'
   | 'Fast Ethernet'
@@ -19,6 +25,8 @@ export type CableTier =
   | '25 Gigabit'
   | '50 Gigabit'
   | '100 Gigabit'
+
+/** Packet service class; forwarding devices admit realtime before stream, then bulk. */
 export type Priority = 'bulk' | 'stream' | 'realtime'
 /** Right-angle cables route through the orthogonal lane planner; diagonal cables draw a direct line. */
 export type CableStyle = 'rightAngle' | 'diagonal'
@@ -30,14 +38,18 @@ export type Device = {
   label: string
   x: number
   y: number
+  /** Occupied physical ports; wireless associations do not consume these. */
   ports: number
   maxPorts: number
   health: number
   wear: number
   offline: boolean
   pps: number
+  /** Logical broadcast domain used when choosing cross-subnet destinations. */
   subnet: number
+  /** Index into `WIFI_STANDARDS`, or -1 for devices that are not access points. */
   wifiLevel: number
+  /** Upgrade dollars eligible for salvage when the device is removed. */
   upgradeSpend: number
   firewallRule: DeviceKind | null
   generated: number
@@ -57,7 +69,9 @@ export type Cable = {
   status: 'idle' | 'active' | 'congested' | 'failed'
   age: number
   vlan: number | null
+  /** Upgrade dollars eligible for salvage; base cable cost is refunded separately. */
   upgradeSpend: number
+  /** Automatic outage countdown caused by sustained congestion. */
   failedTicks: number
   style: CableStyle
 }
@@ -83,7 +97,9 @@ export type GameEvent = {
 export type Packet = {
   id: string
   path: string[]
+  /** Index of the device the packet most recently reached within `path`. */
   hop: number
+  /** Normalized progress along the cable from `path[hop]` to the next device. */
   progress: number
   priority: Priority
   source: string
@@ -94,6 +110,7 @@ export type Packet = {
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
+  /** Save-schema discriminator. Increment when migrations require a new persisted shape. */
   version: 8
   phase: 'playing' | 'paused' | 'gameover'
   scenario: string
@@ -103,18 +120,23 @@ export type GameState = {
   delivered: number
   dropped: number
   failure: number
+  /** User-selected simulation multiplier; affects wall-clock cadence, not game rules. */
   speed: number
   devices: Device[]
   cables: Cable[]
   packets: Packet[]
   events: GameEvent[]
+  /** Per-tick drop counts forming the rolling failure-pressure window. */
   recentDrops: number[]
   multiplier: number
   combo: number
   cleanTicks: number
   rate: number
+  /** Number of dynamically introduced clients, used to continue the spawn rotation. */
   spawned: number
+  /** Reserved deterministic seed retained for save compatibility. */
   seed: number
+  /** Continued game-over runs remain playable but no longer qualify for scores. */
   unscored: boolean
   /** Delivery-count milestones already awarded, so each pays out only once. */
   milestonesReached: number[]
@@ -126,7 +148,7 @@ export type GameState = {
   recentQueueDelayTicks: number
 }
 
-/** A completed run recorded for the local leaderboard, newest entries kept first. */
+/** A completed run recorded for the local, score-sorted leaderboard. */
 export type LeaderboardEntry = {
   id: string
   scenario: string

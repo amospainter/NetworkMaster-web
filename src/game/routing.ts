@@ -3,7 +3,18 @@ import { DEVICE_RULES, WIRELESS_CAPABLE_KINDS } from './constants'
 import { cloneState } from './utils'
 import { findWirelessHub } from './wireless'
 
-/** Finds a shortest operational route using breadth-first search. */
+/**
+ * Finds a shortest operational route using breadth-first search.
+ *
+ * The graph includes working cables plus current wireless associations. Offline
+ * devices, failed cables, incompatible VLAN tags, and source-kind firewall
+ * blocks are excluded before traversal.
+ *
+ * @param state - Current topology and operational state.
+ * @param sourceId - Origin device identifier.
+ * @param destinationId - Destination device identifier.
+ * @returns The shortest device-id path, or `null` when no route exists.
+ */
 export function findRoute(
   state: GameState,
   sourceId: string,
@@ -12,6 +23,13 @@ export function findRoute(
   const source = state.devices.find((device) => device.id === sourceId)
   if (!source) return null
   const adjacency = new Map<string, string[]>()
+  /**
+   * Adds both directions of an operational edge to the transient routing graph.
+   *
+   * @param firstId - First endpoint identifier.
+   * @param secondId - Second endpoint identifier.
+   * @returns Nothing; the adjacency map is updated in place.
+   */
   const addEdge = (firstId: string, secondId: string) => {
     adjacency.set(firstId, [...(adjacency.get(firstId) || []), secondId])
     adjacency.set(secondId, [...(adjacency.get(secondId) || []), firstId])
@@ -59,7 +77,16 @@ export function findRoute(
   return null
 }
 
-/** Returns 0, 1, or 2 depending on whether an edge-disjoint backup route exists. */
+/**
+ * Returns 0, 1, or 2 depending on whether an edge-disjoint backup route exists.
+ * The score intentionally caps at two because gameplay rewards redundancy,
+ * rather than the exact maximum-flow path count.
+ *
+ * @param state - Current topology and operational state.
+ * @param sourceId - Origin device identifier.
+ * @param destinationId - Destination device identifier.
+ * @returns Zero for no path, one for a single path, or two when a backup exists.
+ */
 export function independentPathCount(state: GameState, sourceId: string, destinationId: string) {
   const primaryRoute = findRoute(state, sourceId, destinationId)
   if (!primaryRoute) return 0
@@ -75,7 +102,13 @@ export function independentPathCount(state: GameState, sourceId: string, destina
   return findRoute(stateWithoutPrimaryRoute, sourceId, destinationId) ? 2 : 1
 }
 
-/** Returns a random operational device in a different subnet to receive cross-subnet traffic. */
+/**
+ * Selects an operational device in another subnet to receive cross-subnet traffic.
+ *
+ * @param state - Current game state.
+ * @param source - Traffic-generating source device.
+ * @returns A randomly selected eligible destination, or `undefined` when none exists.
+ */
 export function pickCrossSubnetDest(state: GameState, source: Device): Device | undefined {
   const candidates = state.devices.filter(
     (device) =>
@@ -87,7 +120,15 @@ export function pickCrossSubnetDest(state: GameState, source: Device): Device | 
   return candidates[Math.floor(Math.random() * candidates.length)]
 }
 
-/** Finds a route from `sourceId` to `destinationId` that must pass through `viaId`. */
+/**
+ * Finds a route from a source to a destination that must pass through another device.
+ *
+ * @param state - Current topology and operational state.
+ * @param sourceId - Origin device identifier.
+ * @param viaId - Required intermediate device identifier.
+ * @param destinationId - Destination device identifier.
+ * @returns The combined route, or `null` when either route segment is unavailable.
+ */
 export function findRouteThrough(
   state: GameState,
   sourceId: string,

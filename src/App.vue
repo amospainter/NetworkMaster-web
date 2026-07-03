@@ -71,7 +71,20 @@ const TIER_SPEED_LABEL: Record<CableTier, string> = {
   '50 Gigabit': '50 Gbps',
   '100 Gigabit': '100 Gbps',
 }
-/** Loads only the current save schema; incompatible prototypes start cleanly. */
+/**
+ * Presents a player-facing cable tier without changing persisted identifiers.
+ *
+ * @param tier - Persisted cable tier.
+ * @returns Player-facing tier label.
+ */
+function cableTierLabel(tier: CableTier): string {
+  return tier === 'Copper' ? 'Ethernet' : tier
+}
+/**
+ * Loads and migrates the active run from local storage.
+ *
+ * @returns A compatible game state, or `null` for missing/malformed saves.
+ */
 const loadSavedGame = () => {
   try {
     const savedGame = JSON.parse(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY) || 'null') as
@@ -93,6 +106,7 @@ const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(n
 const placingKind = ref<DeviceKind | null>(null)
 /** Cursor position (canvas percent) for the placement ghost outline; null while off-canvas. */
 const ghostPos = ref<{ x: number; y: number } | null>(null)
+const mobileOverviewOpen = ref(false)
 const canvasStageEl = ref<HTMLElement | null>(null)
 const modal = ref<'help' | 'stats' | 'upgrades' | 'leaderboard' | null>(null)
 const MODAL_TITLES: Record<'help' | 'stats' | 'upgrades' | 'leaderboard', string> = {
@@ -134,15 +148,31 @@ const wirelessConnections = computed(() => {
     .filter((connection) => connection.hub !== null)
 })
 
+/**
+ * Returns the label of the access point currently serving a client.
+ *
+ * @param deviceId - Client device identifier.
+ * @returns Serving access-point label, or `null` when uncovered.
+ */
 function wirelessHubLabel(deviceId: string): string | null {
   return game.value ? (servingWirelessHub(game.value, deviceId)?.label ?? null) : null
 }
-/** Coverage circle diameter as a canvas percentage, shrunk while interfered. */
+/**
+ * Calculates an access point's coverage-circle diameter.
+ *
+ * @param hub - Wireless access point.
+ * @returns Diameter in normalized canvas units.
+ */
 function wifiZoneDiameter(hub: Device): number {
   return hubRange(hub) * 2
 }
 
-/** Packets currently waiting in a forwarding device's strict-priority queue. */
+/**
+ * Counts packets waiting in a forwarding device's strict-priority queue.
+ *
+ * @param deviceId - Forwarding device identifier.
+ * @returns Number of queued packets awaiting admission.
+ */
 function queueDepth(deviceId: string): number {
   if (!game.value) return 0
   return game.value.packets.filter((p) => p.queuedTicks > 0 && p.path[p.hop + 1] === deviceId)
@@ -152,14 +182,23 @@ function queueDepth(deviceId: string): number {
 const THROUGHPUT_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
 
 const SPEED_OPTIONS = [0.5, 1, 2, 3]
-/** Cycles simulation speed through SPEED_OPTIONS, wrapping back to the slowest. */
+/**
+ * Cycles simulation speed through the supported options.
+ *
+ * @returns Nothing; the current game speed is updated when a game exists.
+ */
 function cycleSpeed() {
   if (!game.value) return
   const next = SPEED_OPTIONS[(SPEED_OPTIONS.indexOf(game.value.speed) + 1) % SPEED_OPTIONS.length]
   game.value.speed = next
 }
 
-/** Current packets-per-tick flowing over a forwarding device's attached cables. */
+/**
+ * Totals current traffic over a forwarding device's attached cables.
+ *
+ * @param device - Device whose attached link load should be measured.
+ * @returns Aggregate packets per tick across attached cables.
+ */
 function deviceThroughputUsed(device: Device): number {
   if (!game.value) return 0
   return game.value.cables
@@ -167,7 +206,12 @@ function deviceThroughputUsed(device: Device): number {
     .reduce((total, c) => total + c.load, 0)
 }
 
-/** Throughput fill ratio (0-1, can exceed 1 when over capacity) for the canvas/inspector bar. */
+/**
+ * Calculates the utilization ratio used by canvas and inspector throughput bars.
+ *
+ * @param device - Forwarding device to inspect.
+ * @returns Load divided by effective capacity; may exceed one.
+ */
 function throughputRatio(device: Device): number {
   return deviceThroughputUsed(device) / deviceCapacity(device)
 }
@@ -209,11 +253,21 @@ const advisorTip = computed(() => {
 
 const { packetVisualProgress } = useSimulationClock(game, screen)
 
-/** Escape cancels an armed build tool, same as clicking its panel button again. */
+/**
+ * Cancels an armed build tool when Escape is pressed.
+ *
+ * @param event - Window keyboard event.
+ * @returns Nothing; placement state may be cleared.
+ */
 function handleEscapeKey(event: KeyboardEvent) {
   if (event.key === 'Escape' && placingKind.value) cancelPlacing()
 }
-/** Right-click cancels an armed build tool (same as Escape) instead of opening the browser menu. */
+/**
+ * Uses right-click as a build-tool cancellation gesture.
+ *
+ * @param event - Window context-menu event.
+ * @returns Nothing; the browser menu is suppressed and placement may be cleared.
+ */
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault()
   if (placingKind.value) cancelPlacing()
@@ -241,7 +295,12 @@ watch(
   { deep: true },
 )
 
-/** Starts a fresh run and clears transient canvas selection. */
+/**
+ * Starts a fresh run and clears transient canvas selection.
+ *
+ * @param scenarioId - Scenario identifier to initialize.
+ * @returns Nothing; reactive game and screen state are replaced.
+ */
 function start(scenarioId: string) {
   game.value = newGame(scenarioId)
   screen.value = 'game'
@@ -253,6 +312,12 @@ const CANVAS_HINT_ACTIONS = 4
 const canvasInteractionCount = ref(0)
 const canvasHintVisible = computed(() => canvasInteractionCount.value < CANVAS_HINT_ACTIONS)
 
+/**
+ * Resolves a device tap according to the active interaction mode.
+ *
+ * @param device - Device selected by the player.
+ * @returns Nothing; topology or selection state may be updated.
+ */
 function selectDevice(device: Device) {
   if (!game.value) return
   canvasInteractionCount.value++
@@ -273,31 +338,61 @@ function selectDevice(device: Device) {
   }
   selected.value = device.id
 }
-/** Starts drawing a new cable from a device, canceling any pending reroute. */
+/**
+ * Starts drawing a new cable from a device, canceling any pending reroute.
+ *
+ * @param deviceId - Starting device identifier.
+ * @returns Nothing; cabling interaction state is armed.
+ */
 function beginCable(deviceId: string) {
   reroutingCable.value = null
   cableStart.value = deviceId
 }
-/** Begins rerouting one end of the selected cable to a new device on next pick. */
+/**
+ * Begins rerouting one end of the selected cable on the next device pick.
+ *
+ * @param movingFromEnd - Whether the cable's `from` endpoint should move.
+ * @returns Nothing; rerouting interaction state is armed when a cable is selected.
+ */
 function startReroute(movingFromEnd: boolean) {
   if (!pickedCable.value) return
   cableStart.value = null
   reroutingCable.value = { cableId: pickedCable.value.id, movingFromEnd }
 }
-/** Closes the inspector and cancels any in-progress cable reroute. */
+/**
+ * Closes the inspector and cancels any in-progress cable reroute.
+ *
+ * @returns Nothing; selection and reroute state are cleared.
+ */
 function closeInspector() {
   selected.value = null
   reroutingCable.value = null
 }
+/**
+ * Replaces the reactive game snapshot with an engine operation result.
+ *
+ * @param next - Next immutable game snapshot.
+ * @returns Nothing; reactive game state is replaced.
+ */
 function setGame(next: GameState) {
   game.value = next
 }
-/** Arms/disarms the build-panel stamp tool; picking the same kind again cancels it. */
+/**
+ * Arms or disarms the build-panel stamp tool.
+ *
+ * @param kind - Device kind selected in the build panel.
+ * @returns Nothing; placement and ghost state are updated.
+ */
 function armBuildTool(kind: DeviceKind) {
   placingKind.value = placingKind.value === kind ? null : kind
   ghostPos.value = null
 }
-/** Converts a pointer event to canvas-percent coordinates within the transformed stage. */
+/**
+ * Converts a pointer event to normalized coordinates within the transformed stage.
+ *
+ * @param event - Pointer event to project.
+ * @returns Canvas coordinates, or `null` before the stage is mounted.
+ */
 function canvasPercentPosition(event: PointerEvent): { x: number; y: number } | null {
   const stage = canvasStageEl.value
   if (!stage) return null
@@ -307,12 +402,22 @@ function canvasPercentPosition(event: PointerEvent): { x: number; y: number } | 
     y: ((event.clientY - stageBounds.top) / stageBounds.height) * 100,
   }
 }
-/** Tracks the cursor while a build tool is armed, so the ghost outline follows it. */
+/**
+ * Updates canvas panning and the armed placement ghost.
+ *
+ * @param event - Canvas pointer-move event.
+ * @returns Nothing; pan and ghost state may be updated.
+ */
 function trackGhost(event: PointerEvent) {
   moveCanvasPan(event)
   if (placingKind.value) ghostPos.value = canvasPercentPosition(event)
 }
-/** Stamps the armed build tool at the clicked point; the tool stays armed for repeat placement. */
+/**
+ * Stamps the armed build tool at the clicked canvas point.
+ *
+ * @param event - Canvas pointer event supplying placement coordinates.
+ * @returns Nothing; game state may receive a newly built device.
+ */
 function placeArmedDevice(event: PointerEvent) {
   if (!game.value || !placingKind.value) return
   const position = canvasPercentPosition(event)
@@ -320,12 +425,21 @@ function placeArmedDevice(event: PointerEvent) {
   canvasInteractionCount.value++
   game.value = buildDevice(game.value, placingKind.value, position.x, position.y)
 }
+/**
+ * Clears placement state for keyboard, context-menu, and repeat-button cancellation.
+ *
+ * @returns Nothing; armed kind and ghost coordinates are cleared.
+ */
 function cancelPlacing() {
   placingKind.value = null
   ghostPos.value = null
 }
 
-/** Removes the selected cable and closes its inspector. */
+/**
+ * Removes the selected cable and closes its inspector.
+ *
+ * @returns Nothing; game and selection state are updated when a cable is selected.
+ */
 function deleteSelectedCable() {
   if (!game.value || !pickedCable.value) return
   game.value = deleteCable(game.value, pickedCable.value.id)
@@ -333,7 +447,11 @@ function deleteSelectedCable() {
   reroutingCable.value = null
 }
 
-/** Removes selected infrastructure and closes its inspector. */
+/**
+ * Removes selected infrastructure and closes its inspector.
+ *
+ * @returns Nothing; game and selection state are updated when a device is selected.
+ */
 function removeSelectedDevice() {
   if (!game.value || !picked.value) return
   game.value = removeDevice(game.value, picked.value.id)
@@ -341,6 +459,12 @@ function removeSelectedDevice() {
   reroutingCable.value = null
 }
 
+/**
+ * Applies the site-wide discount to a full-price total for UI estimates.
+ *
+ * @param fullPrice - Undiscounted aggregate price.
+ * @returns Discounted whole-dollar price.
+ */
 const siteDiscountedCost = (fullPrice: number) => Math.floor(fullPrice * 0.85)
 /** Discounted cost of the site-wide cable rollout to the currently picked tier. */
 const siteCableCost = computed(() =>
@@ -363,7 +487,11 @@ const siteSwitchSpeedCost = computed(() =>
     : 0,
 )
 
-/** Resumes a failed topology without allowing additional leaderboard scoring. */
+/**
+ * Resumes a failed topology without allowing additional leaderboard scoring.
+ *
+ * @returns Nothing; phase, score eligibility, and failure pressure are updated.
+ */
 function continueUnscored() {
   if (!game.value) return
   game.value.phase = 'playing'
@@ -371,20 +499,37 @@ function continueUnscored() {
   game.value.failure = 0
   game.value.recentDrops = []
 }
-/** Returns the path selected by the orthogonal cable router. */
+/**
+ * Returns the SVG path selected by the cable router.
+ *
+ * @param cableId - Cable whose route should be serialized.
+ * @returns SVG path data, or an empty string when no route exists.
+ */
 function cablePath(cableId: string): string {
   const route = cableRoutes.value.get(cableId)
   return route ? routeToSvgPath(route) : ''
 }
 
-/** Canvas position at the midpoint of a cable's routed path, for its bandwidth label. */
+/**
+ * Calculates the midpoint of a routed cable for its bandwidth label.
+ *
+ * @param cableId - Cable whose midpoint should be found.
+ * @returns Normalized canvas position, or the origin when no route exists.
+ */
 function cableLabelPos(cableId: string): { x: number; y: number } {
   const route = cableRoutes.value.get(cableId)
   if (!route) return { x: 0, y: 0 }
   return pointAlongRoute(route.points, 0.5)
 }
 
-/** Maps packet progress onto the routed geometry of its current cable. */
+/**
+ * Maps packet progress onto the routed geometry of its current cable.
+ *
+ * @param path - Packet's ordered device-id route.
+ * @param hop - Index of the packet's current device.
+ * @param progress - Normalized progress toward the next hop.
+ * @returns Interpolated normalized canvas position.
+ */
 function packetPos(path: string[], hop: number, progress: number) {
   if (!game.value) return { x: 0, y: 0 }
   const currentDeviceId = path[hop]
@@ -409,12 +554,25 @@ function packetPos(path: string[], hop: number, progress: number) {
   return pointAlongRoute(points, progress)
 }
 let activeDrag: { id: string; startX: number; startY: number; moved: boolean } | null = null
+/**
+ * Captures a device pointer unless another active tool owns the gesture.
+ *
+ * @param event - Device pointer-down event.
+ * @param device - Device targeted by the pointer.
+ * @returns Nothing; drag state and pointer capture may be initialized.
+ */
 function startDeviceDrag(event: PointerEvent, device: Device) {
   if (cableStart.value || placingKind.value) return
   event.stopPropagation() // don't also start a background canvas pan
   activeDrag = { id: device.id, startX: event.clientX, startY: event.clientY, moved: false }
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
 }
+/**
+ * Moves a captured device after a threshold separates drags from selection taps.
+ *
+ * @param event - Device pointer-move event.
+ * @returns Nothing; game state may receive updated device coordinates.
+ */
 function moveDraggedDevice(event: PointerEvent) {
   if (!activeDrag || !game.value) return
   const canvas = (event.currentTarget as HTMLElement).parentElement
@@ -431,6 +589,13 @@ function moveDraggedDevice(event: PointerEvent) {
     ((event.clientY - canvasBounds.top) / canvasBounds.height) * 100,
   )
 }
+/**
+ * Completes a drag or delegates to normal selection when the pointer did not move.
+ *
+ * @param event - Device pointer-up event.
+ * @param device - Device targeted by the completed gesture.
+ * @returns Nothing; drag and selection state are updated.
+ */
 function finishDeviceDrag(event: PointerEvent, device: Device) {
   const moved = activeDrag?.moved
   activeDrag = null
@@ -464,7 +629,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         @toggle-pause="game.phase = game.phase === 'playing' ? 'paused' : 'playing'"
         @open-leaderboard="modal = 'leaderboard'"
       />
-      <div class="workspace">
+      <div class="workspace" :class="{ 'inspector-open': picked || pickedCable }">
         <BuildPanel :budget="game.budget" :active-kind="placingKind" @select="armBuildTool" />
         <div
           class="canvas"
@@ -505,7 +670,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               :class="c.status"
               :style="{ left: cableLabelPos(c.id).x + '%', top: cableLabelPos(c.id).y + '%' }"
             >
-              <b>{{ c.tier }}</b
+              <b>{{ cableTierLabel(c.tier) }}</b
               ><span>{{ c.load }}/{{ c.capacity }} pkt</span>
             </div>
             <div
@@ -590,7 +755,19 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             }}
           </div>
           <div class="advisor-tip"><EthernetPort />Jackie: {{ advisorTip }}</div>
-          <div class="minimap" @pointerdown.stop>
+          <div class="mobile-canvas-controls" @pointerdown.stop>
+            <button aria-label="Zoom in" @click="zoomBy(0.2)">+</button>
+            <button aria-label="Zoom out" @click="zoomBy(-0.2)">−</button>
+            <button aria-label="Reset view" @click="resetView">Reset</button>
+            <button
+              aria-label="Toggle network overview"
+              :aria-pressed="mobileOverviewOpen"
+              @click="mobileOverviewOpen = !mobileOverviewOpen"
+            >
+              Map
+            </button>
+          </div>
+          <div class="minimap" :class="{ 'mobile-open': mobileOverviewOpen }" @pointerdown.stop>
             <div class="panel-title">
               <span>Overview</span>
               <div class="zoom-controls">
@@ -815,7 +992,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 {{ game.devices.find((d) => d.id === pickedCable!.to)?.label }}
               </h2>
               <div class="stat">
-                <span>Tier</span><b>{{ pickedCable.tier }}</b>
+                <span>Tier</span><b>{{ cableTierLabel(pickedCable.tier) }}</b>
               </div>
               <div class="stat">
                 <span>Traffic</span><b>{{ pickedCable.load }} / {{ pickedCable.capacity }} pkt</b>
@@ -943,7 +1120,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 </li>
                 <li>Drag any device to reposition it — useful for shifting Wi-Fi coverage.</li>
                 <li>
-                  Pan by dragging empty canvas; zoom with the scroll wheel or the +/− buttons.
+                  Pan by dragging empty canvas; zoom with a scroll wheel, pinch gesture, or the +/−
+                  buttons.
                 </li>
                 <li>
                   Only the <b>router</b> may connect to the Cloud Edge, and two end devices can

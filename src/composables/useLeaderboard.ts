@@ -2,9 +2,14 @@ import { ref, watch, type Ref } from 'vue'
 import type { GameState, LeaderboardEntry } from '../types'
 
 const LEADERBOARD_STORAGE_KEY = 'networkmaster.leaderboard.v1'
+/** Maximum number of locally persisted completed runs. */
 export const LEADERBOARD_SIZE = 10
 
-/** Loads the personal leaderboard; malformed or missing storage starts empty. */
+/**
+ * Loads the personal leaderboard from local storage.
+ *
+ * @returns Parsed entries, or an empty array for missing/malformed storage.
+ */
 const loadLeaderboard = (): LeaderboardEntry[] => {
   try {
     const stored = JSON.parse(localStorage.getItem(LEADERBOARD_STORAGE_KEY) || '[]')
@@ -14,7 +19,11 @@ const loadLeaderboard = (): LeaderboardEntry[] => {
   }
 }
 
-/** Creates an entry id in modern browsers and a non-secure-context fallback elsewhere. */
+/**
+ * Creates a leaderboard entry identifier.
+ *
+ * @returns A UUID or non-secure-context fallback identifier.
+ */
 const createEntryId = () =>
   typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -24,11 +33,19 @@ const createEntryId = () =>
  * Owns the local (unversioned, not part of `GameState`) personal leaderboard:
  * the 10 highest-scoring completed runs. Automatically records a new entry
  * exactly once per run, on the `phase` transition into `'gameover'`.
+ *
+ * @param game - Reactive current game state.
+ * @returns Reactive leaderboard entries and an explicit recording function.
  */
 export function useLeaderboard(game: Ref<GameState | null>) {
   const leaderboard = ref<LeaderboardEntry[]>(loadLeaderboard())
 
-  /** Appends a finished run to the local leaderboard, keeping the top scores. */
+  /**
+   * Appends a finished run to the local leaderboard, keeping the top scores.
+   *
+   * @param finishedGame - Completed game state to record.
+   * @returns Nothing; reactive and persisted leaderboard state are updated.
+   */
   function recordLeaderboardEntry(finishedGame: GameState) {
     leaderboard.value = [
       ...leaderboard.value,

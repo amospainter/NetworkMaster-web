@@ -5,6 +5,8 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
  * so only devices with `.offline === true` ever toggle between their normal
  * icon and the unplugged-cable icon. See CLAUDE.md for why this replaced an
  * earlier CSS `animation` approach.
+ *
+ * @returns Reactive visibility state for offline-device icons.
  */
 export function useOfflineBlink() {
   const offlineBlinkOn = ref(true)

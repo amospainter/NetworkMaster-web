@@ -3,7 +3,24 @@ import { costs, SALVAGE_RATE, WIRELESS_ONLY_KINDS } from './constants'
 import { createCable, createDevice } from './factories'
 import { addEvent, cloneState, event } from './utils'
 
-/** Validates topology rules and adds a new copper connection. */
+/**
+ * Tests whether topology rules classify a device as a non-forwarding wired endpoint.
+ *
+ * @param device - Device to classify.
+ * @returns Whether the device requires forwarding equipment between it and another endpoint.
+ */
+const isEndDevice = (device: Device): boolean =>
+  ['pc', 'tv', 'console', 'server'].includes(device.kind)
+
+/**
+ * Validates topology rules and adds a new base-tier connection.
+ *
+ * @param state - Current game state.
+ * @param from - First endpoint identifier.
+ * @param to - Second endpoint identifier.
+ * @param style - Visual cable-routing style.
+ * @returns Updated state, or the original state when the connection is invalid.
+ */
 export function addCable(
   state: GameState,
   from: string,
@@ -29,8 +46,7 @@ export function addCable(
       ...state,
       events: [event(state, 'Connection rejected: no free ports.'), ...state.events].slice(0, 6),
     }
-  const end = (d: Device) => ['pc', 'tv', 'console', 'server'].includes(d.kind)
-  if (end(a) && end(b))
+  if (isEndDevice(a) && isEndDevice(b))
     return {
       ...state,
       events: [
@@ -58,6 +74,12 @@ export function addCable(
  * Moves one end of an existing cable to a new device, preserving its tier,
  * VLAN, style, and upgrade investment. Validation mirrors `addCable` while
  * keeping the fixed end untouched. Mirrors the native `rerouteCable`.
+ *
+ * @param state - Current game state.
+ * @param cableId - Cable to reroute.
+ * @param movingFromEnd - Whether to replace the cable's `from` endpoint.
+ * @param newDeviceId - Replacement endpoint identifier.
+ * @returns Updated state, or the original state when rerouting is invalid.
  */
 export function rerouteCable(
   state: GameState,
@@ -75,8 +97,7 @@ export function rerouteCable(
     target = s.devices.find((d) => d.id === newDeviceId),
     moving = s.devices.find((d) => d.id === movingId)
   if (!fixed || !target || !moving) return state
-  const end = (d: Device) => ['pc', 'tv', 'console', 'server'].includes(d.kind)
-  if (end(fixed) && end(target))
+  if (isEndDevice(fixed) && isEndDevice(target))
     return {
       ...state,
       events: [
@@ -133,14 +154,27 @@ export function rerouteCable(
   return s
 }
 
-/** Returns the native 90% salvage value for removable infrastructure. */
+/**
+ * Calculates the salvage value for removable infrastructure.
+ *
+ * @param device - Device being valued.
+ * @returns Refund amount, or zero for non-buildable device kinds.
+ */
 export function deviceRemovalRefund(device: Device): number {
   const buildCost = costs[device.kind]
   if (!buildCost) return 0
   return Math.floor((buildCost + device.upgradeSpend) * SALVAGE_RATE)
 }
 
-/** Purchases and places infrastructure at a canvas percentage coordinate. */
+/**
+ * Purchases and places infrastructure at a canvas percentage coordinate.
+ *
+ * @param state - Current game state.
+ * @param kind - Infrastructure kind to build.
+ * @param x - Horizontal canvas percentage.
+ * @param y - Vertical canvas percentage.
+ * @returns Updated state, or an event-bearing copy when the budget is insufficient.
+ */
 export function buildDevice(state: GameState, kind: DeviceKind, x = 50, y = 55): GameState {
   const cost = costs[kind] ?? 999
   if (state.budget < cost)
@@ -153,7 +187,13 @@ export function buildDevice(state: GameState, kind: DeviceKind, x = 50, y = 55):
   return s
 }
 
-/** Removes a cable, clears in-flight traffic, and returns 90% of upgrade spend. */
+/**
+ * Removes a cable, clears in-flight traffic, and refunds eligible upgrade spend.
+ *
+ * @param state - Current game state.
+ * @param cableId - Cable to remove.
+ * @returns Updated state, or the original state when the cable does not exist.
+ */
 export function deleteCable(state: GameState, cableId: string): GameState {
   const s = cloneState(state),
     c = s.cables.find((x) => x.id === cableId)
@@ -170,7 +210,13 @@ export function deleteCable(state: GameState, cableId: string): GameState {
   return s
 }
 
-/** Cycles a cable through untagged and VLANs 1–4. */
+/**
+ * Cycles a cable through untagged and VLANs 1–4.
+ *
+ * @param state - Current game state.
+ * @param cableId - Cable whose VLAN should change.
+ * @returns Updated state, or the original state when the cable does not exist.
+ */
 export function cycleCableVlan(state: GameState, cableId: string): GameState {
   const nextState = cloneState(state)
   const networkCable = nextState.cables.find((candidate) => candidate.id === cableId)
@@ -182,7 +228,13 @@ export function cycleCableVlan(state: GameState, cableId: string): GameState {
   return nextState
 }
 
-/** Cycles a firewall rule through no block, PC, TV, and console traffic. */
+/**
+ * Cycles a firewall rule through no block, PC, TV, and console traffic.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Firewall device identifier.
+ * @returns Updated state, or the original state for a missing/non-firewall device.
+ */
 export function cycleFirewallRule(state: GameState, deviceId: string): GameState {
   const nextState = cloneState(state)
   const firewall = nextState.devices.find((device) => device.id === deviceId)
@@ -200,6 +252,10 @@ export function cycleFirewallRule(state: GameState, deviceId: string): GameState
  *
  * The refund combines 90% of build and device-upgrade spend with the salvage
  * value of attached cable upgrades. End-user devices and the Cloud are fixed.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Infrastructure device to remove.
+ * @returns Updated state, or the original state when the device is not removable.
  */
 export function removeDevice(state: GameState, deviceId: string): GameState {
   const device = state.devices.find((candidate) => candidate.id === deviceId)
@@ -232,7 +288,15 @@ export function removeDevice(state: GameState, deviceId: string): GameState {
   return nextState
 }
 
-/** Moves a device while clamping it inside the playable canvas. */
+/**
+ * Moves a device while clamping it inside the playable canvas.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Device to move.
+ * @param x - Requested horizontal canvas percentage.
+ * @param y - Requested vertical canvas percentage.
+ * @returns Updated state, or the original state when the device is missing.
+ */
 export function moveDevice(state: GameState, deviceId: string, x: number, y: number): GameState {
   const s = cloneState(state),
     d = s.devices.find((v) => v.id === deviceId)

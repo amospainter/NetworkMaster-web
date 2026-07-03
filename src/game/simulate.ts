@@ -20,6 +20,10 @@ import { deviceCapacity, hubRange } from './wireless'
  * Eases demand in over a scenario's opening ticks so the network starts quiet
  * and the player can connect devices before traffic reaches full intensity.
  * Mirrors the native `warmupFactor`.
+ *
+ * @param tick - Current simulation tick.
+ * @param scenario - Active scenario pacing configuration.
+ * @returns Demand multiplier between the scenario floor and 1.
  */
 function warmupFactor(tick: number, scenario: Scenario): number {
   if (tick >= scenario.warmupTicks) return 1
@@ -27,7 +31,13 @@ function warmupFactor(tick: number, scenario: Scenario): number {
   return scenario.warmupFloor + (1 - scenario.warmupFloor) * progress
 }
 
-/** Returns the active traffic-spike multiplier for a device (2x while spiked). */
+/**
+ * Returns the active traffic-spike multiplier for a device.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Traffic source identifier.
+ * @returns Two while the source is spiked, otherwise one.
+ */
 function trafficSpikeMultiplier(state: GameState, deviceId: string): number {
   return state.activeEvents.some(
     (event) => event.kind === 'trafficSpike' && event.targetId === deviceId,
@@ -36,7 +46,14 @@ function trafficSpikeMultiplier(state: GameState, deviceId: string): number {
     : 1
 }
 
-/** Creates an in-flight packet at the beginning of a resolved route. */
+/**
+ * Creates an in-flight packet at the beginning of a resolved route.
+ *
+ * @param source - Device generating the packet.
+ * @param path - Precomputed device-id route.
+ * @param tick - Generation tick used for latency accounting.
+ * @returns A new packet positioned at the start of its route.
+ */
 function packet(source: Device, path: string[], tick: number): Packet {
   return {
     id: createId(),
@@ -50,7 +67,12 @@ function packet(source: Device, path: string[], tick: number): Packet {
   }
 }
 
-/** Adds the next end-user device in the native spawn rotation. */
+/**
+ * Adds the next end-user device in the configured spawn rotation.
+ *
+ * @param s - Mutable simulation draft.
+ * @returns Nothing; the supplied draft is updated in place.
+ */
 function spawnDevice(s: GameState) {
   if (s.devices.length >= 20) return
   const kind = SOURCE_SPAWN_ORDER[s.spawned % SOURCE_SPAWN_ORDER.length],
@@ -75,6 +97,10 @@ function spawnDevice(s: GameState) {
  * Rolls a single challenge event, mirroring the native `rollChallengeEvent`
  * weighting. Equipment-failure events only fire in scenarios that enable
  * equipment failure; the others can occur in any scenario.
+ *
+ * @param state - Mutable simulation draft.
+ * @param scenario - Active scenario configuration.
+ * @returns Nothing; any selected event is applied to the draft.
  */
 function rollChallengeEvent(state: GameState, scenario: Scenario) {
   const roll = Math.random() * 100
@@ -145,7 +171,12 @@ function rollChallengeEvent(state: GameState, scenario: Scenario) {
   addEvent(state, `${target.label} failed! Repair or replace it.`)
 }
 
-/** Decrements timed events, announces expirations, and drops spent entries. */
+/**
+ * Decrements timed events, announces expirations, and drops spent entries.
+ *
+ * @param state - Mutable simulation draft.
+ * @returns Nothing; active events are updated in place.
+ */
 function tickActiveEvents(state: GameState) {
   for (const event of state.activeEvents) {
     event.ticksRemaining--
@@ -161,6 +192,9 @@ function tickActiveEvents(state: GameState) {
  * Random Wi-Fi interference: active access points occasionally lose range and
  * throughput for a stretch of ticks, making wireless less dependable than a
  * wired link. Mirrors the native `tickWirelessInterference`.
+ *
+ * @param state - Mutable simulation draft.
+ * @returns Nothing; access-point interference state is updated in place.
  */
 function tickWirelessInterference(state: GameState) {
   for (const device of state.devices) {
@@ -188,7 +222,12 @@ function tickWirelessInterference(state: GameState) {
   }
 }
 
-/** Awards each delivery-count milestone once, mirroring the native rewards. */
+/**
+ * Awards each delivery-count milestone once.
+ *
+ * @param state - Mutable simulation draft.
+ * @returns Nothing; rewards and milestone history are updated in place.
+ */
 function checkMilestones(state: GameState) {
   const milestones = MILESTONES[state.scenario] ?? MILESTONES.home
   for (const milestone of milestones) {
@@ -205,6 +244,9 @@ function checkMilestones(state: GameState) {
  * The reducer never mutates the caller's object. Its phases mirror the native
  * engine: advance packets, account for link/device load, generate traffic,
  * update pressure/economy, then evaluate progression and game over.
+ *
+ * @param state - Current immutable game snapshot.
+ * @returns The next game snapshot, or the same object when simulation is not playing.
  */
 export function simulate(state: GameState): GameState {
   if (state.phase !== 'playing') return state

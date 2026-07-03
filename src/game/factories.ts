@@ -2,7 +2,16 @@ import type { Cable, CableStyle, CableTier, Device, DeviceKind } from '../types'
 import { CABLE_TIERS, DEVICE_RULES, WIFI_STANDARDS } from './constants'
 import { createId } from './utils'
 
-/** Creates a device with the native game's default port and throughput rules. */
+/**
+ * Creates a device with the default port and throughput rules for its kind.
+ *
+ * @param kind - Device kind to create.
+ * @param label - Player-facing device label.
+ * @param x - Horizontal canvas percentage.
+ * @param y - Vertical canvas percentage.
+ * @param subnet - Initial logical subnet identifier.
+ * @returns A new online device with no occupied ports or upgrade spend.
+ */
 export const createDevice = (
   kind: DeviceKind,
   label: string,
@@ -30,7 +39,16 @@ export const createDevice = (
   interference: 0,
 })
 
-/** Creates an unloaded, operational cable between two devices. */
+/**
+ * Creates an unloaded, operational cable between two devices.
+ *
+ * @param firstDevice - First endpoint.
+ * @param secondDevice - Second endpoint.
+ * @param tier - Initial cable tier.
+ * @param vlan - Optional VLAN restriction.
+ * @param style - Visual routing style.
+ * @returns A new cable using the selected tier's capacity.
+ */
 export const createCable = (
   firstDevice: Device,
   secondDevice: Device,
@@ -55,6 +73,16 @@ export const createCable = (
   }
 }
 
+/**
+ * Appends a scenario-authored cable without player-economy validation.
+ *
+ * @param cables - Mutable scenario cable collection.
+ * @param firstDevice - First endpoint.
+ * @param secondDevice - Second endpoint.
+ * @param tier - Initial cable tier.
+ * @param vlan - Optional VLAN restriction.
+ * @returns The new array length returned by `Array.push`.
+ */
 export const connectDevices = (
   cables: Cable[],
   firstDevice: Device,
@@ -63,7 +91,12 @@ export const connectDevices = (
   vlan: number | null = null,
 ) => cables.push(createCable(firstDevice, secondDevice, tier, vlan))
 
-/** Builds the starting topology for one of the eight scenario definitions. */
+/**
+ * Builds the starting topology for a scenario definition.
+ *
+ * @param scenarioId - Scenario identifier; unknown values fall back to the home topology.
+ * @returns Newly created devices and cables for the scenario.
+ */
 export function createScenarioTopology(scenarioId: string): {
   devices: Device[]
   cables: Cable[]

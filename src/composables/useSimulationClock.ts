@@ -7,6 +7,10 @@ import type { GameState } from '../types'
  * — and the requestAnimationFrame clock used to smoothly interpolate packet
  * positions between discrete ticks. Owns its own timers; call once from the
  * root component's setup so `onMounted`/`onBeforeUnmount` register correctly.
+ *
+ * @param game - Reactive current game state.
+ * @param screen - Reactive application screen.
+ * @returns Clock state, interval calculation, and packet interpolation helper.
  */
 export function useSimulationClock(game: Ref<GameState | null>, screen: Ref<'menu' | 'game'>) {
   let simulationTimer: number | undefined
@@ -14,9 +18,18 @@ export function useSimulationClock(game: Ref<GameState | null>, screen: Ref<'men
   const animationTime = ref(performance.now())
   const lastSimulationTickTime = ref(performance.now())
 
+  /**
+   * Returns the current wall-clock duration of one simulation tick.
+   *
+   * @returns Tick duration in milliseconds at the selected simulation speed.
+   */
   const simulationInterval = () => 800 / (game.value?.speed ?? 1)
 
-  /** Keeps the browser timer synchronized with pause and speed controls. */
+  /**
+   * Keeps the browser timer synchronized with pause and speed controls.
+   *
+   * @returns Nothing; the active interval is replaced or cleared.
+   */
   const synchronizeSimulationTimer = () => {
     clearInterval(simulationTimer)
     lastSimulationTickTime.value = performance.now()
@@ -33,7 +46,12 @@ export function useSimulationClock(game: Ref<GameState | null>, screen: Ref<'men
     immediate: true,
   })
 
-  /** Smoothly advances the visual half-hop between discrete simulation ticks. */
+  /**
+   * Smoothly advances visual packet progress between discrete simulation ticks.
+   *
+   * @param simulationProgress - Packet progress stored by the simulation.
+   * @returns Interpolated progress capped below the next hop boundary.
+   */
   function packetVisualProgress(simulationProgress: number): number {
     if (game.value?.phase !== 'playing') return simulationProgress
     const elapsed = animationTime.value - lastSimulationTickTime.value
@@ -42,6 +60,12 @@ export function useSimulationClock(game: Ref<GameState | null>, screen: Ref<'men
   }
 
   onMounted(() => {
+    /**
+     * Refreshes the interpolation clock and schedules the next animation frame.
+     *
+     * @param timestamp - Animation-frame timestamp in milliseconds.
+     * @returns Nothing; animation clock state is updated.
+     */
     const updateAnimationClock = (timestamp: number) => {
       animationTime.value = timestamp
       animationFrame = requestAnimationFrame(updateAnimationClock)

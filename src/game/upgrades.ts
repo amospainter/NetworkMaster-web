@@ -7,7 +7,13 @@ import {
 } from './constants'
 import { addEvent, cloneState, discountedSiteCost, event } from './utils'
 
-/** Advances a cable by one tier and records its refundable player investment. */
+/**
+ * Advances a cable by one tier and records its refundable player investment.
+ *
+ * @param state - Current game state.
+ * @param cableId - Cable to upgrade.
+ * @returns Updated state, or the original/event-bearing state when upgrade is unavailable.
+ */
 export function upgradeCable(state: GameState, cableId: string): GameState {
   const s = cloneState(state),
     c = s.cables.find((x) => x.id === cableId)
@@ -29,7 +35,13 @@ export function upgradeCable(state: GameState, cableId: string): GameState {
   return s
 }
 
-/** Adds two physical ports to a router or switch. */
+/**
+ * Adds two physical ports to a router or switch.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Router or switch to upgrade.
+ * @returns Updated state, or the original/event-bearing state when upgrade is unavailable.
+ */
 export function upgradeDevicePorts(state: GameState, deviceId: string): GameState {
   if (state.budget < 50)
     return {
@@ -49,7 +61,13 @@ export function upgradeDevicePorts(state: GameState, deviceId: string): GameStat
   return s
 }
 
-/** Raises forwarding throughput for a router, switch, or wireless access point. */
+/**
+ * Raises forwarding throughput for supported infrastructure.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Forwarding device to upgrade.
+ * @returns Updated state, or the original state when upgrade is unavailable.
+ */
 export function upgradeDeviceSpeed(state: GameState, deviceId: string): GameState {
   const s = cloneState(state),
     d = s.devices.find((x) => x.id === deviceId)
@@ -67,6 +85,10 @@ export function upgradeDeviceSpeed(state: GameState, deviceId: string): GameStat
  * Advances an access point to the next Wi-Fi generation. Applies only the
  * generation's pps delta (not an overwrite) so an access point's independent
  * `upgradeDeviceSpeed` throughput bonus survives a later generation upgrade.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Wireless access point to upgrade.
+ * @returns Updated state, or the original state when upgrade is unavailable.
  */
 export function upgradeWifi(state: GameState, deviceId: string): GameState {
   const s = cloneState(state),
@@ -83,7 +105,13 @@ export function upgradeWifi(state: GameState, deviceId: string): GameState {
   return s
 }
 
-/** Restores an infrastructure device while intentionally retaining accumulated wear. */
+/**
+ * Restores an infrastructure device while intentionally retaining accumulated wear.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Device to repair.
+ * @returns Updated state, or the original state when the repair cannot be purchased.
+ */
 export function repairDevice(state: GameState, deviceId: string): GameState {
   if (state.budget < 40) return state
   const s = cloneState(state),
@@ -96,13 +124,25 @@ export function repairDevice(state: GameState, deviceId: string): GameState {
   return s
 }
 
-/** True when a cable is the fixed-tier ISP uplink, excluded from site bulk-upgrades. */
+/**
+ * Tests whether a cable is the fixed-tier cloud uplink.
+ *
+ * @param state - Current game state.
+ * @param cable - Cable to inspect.
+ * @returns Whether either endpoint is the cloud device.
+ */
 const isCloudCable = (state: GameState, cable: Cable) => {
   const cloudId = state.devices.find((device) => device.kind === 'cloud')?.id
   return cable.from === cloudId || cable.to === cloudId
 }
 
-/** Cables (excluding the cloud uplink) below the given tier, eligible for a site upgrade. */
+/**
+ * Finds cables eligible for a site-wide tier upgrade.
+ *
+ * @param state - Current game state.
+ * @param target - Desired cable tier.
+ * @returns Non-cloud cables currently below the target tier.
+ */
 export function siteCableUpgradeTargets(state: GameState, target: CableTier): Cable[] {
   const targetIndex = CABLE_TIERS.findIndex((tier) => tier.name === target)
   return state.cables.filter(
@@ -112,7 +152,13 @@ export function siteCableUpgradeTargets(state: GameState, target: CableTier): Ca
   )
 }
 
-/** Undiscounted price to bring every eligible cable up to `target`, every intervening tier included. */
+/**
+ * Calculates the undiscounted price to bring eligible cables to a target tier.
+ *
+ * @param state - Current game state.
+ * @param target - Desired cable tier.
+ * @returns Full price including every intervening tier for every eligible cable.
+ */
 export function siteCableUpgradeFullCost(state: GameState, target: CableTier): number {
   const targetIndex = CABLE_TIERS.findIndex((tier) => tier.name === target)
   return siteCableUpgradeTargets(state, target).reduce((total, cable) => {
@@ -127,6 +173,10 @@ export function siteCableUpgradeFullCost(state: GameState, target: CableTier): n
  * every intervening tier per cable. Mirrors the native `upgradeAllCables`,
  * which exposes a 100 Mbps / 1 Gbps target picker; the cloud uplink is
  * excluded since its tier is fixed by the scenario.
+ *
+ * @param state - Current game state.
+ * @param target - Desired site-wide cable tier.
+ * @returns Updated state, or an event-bearing copy when no upgrade can be applied.
  */
 export function upgradeAllCables(state: GameState, target: CableTier): GameState {
   const targets = siteCableUpgradeTargets(state, target)
@@ -159,7 +209,12 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
   return s
 }
 
-/** Applies the discounted two-port expansion to every router and switch. */
+/**
+ * Applies the discounted two-port expansion to every router and switch.
+ *
+ * @param state - Current game state.
+ * @returns Updated state, or an event-bearing copy when the upgrade cannot be applied.
+ */
 export function upgradeAllPorts(state: GameState): GameState {
   const targets = state.devices.filter((d) => ['router', 'switch'].includes(d.kind)),
     cost = discountedSiteCost(targets.length * 50)
@@ -183,7 +238,12 @@ export function upgradeAllPorts(state: GameState): GameState {
   return s
 }
 
-/** Applies the native 15%-discounted speed upgrade to every installed switch. */
+/**
+ * Applies the discounted speed upgrade to every installed switch.
+ *
+ * @param state - Current game state.
+ * @returns Updated state, or an event-bearing copy when the upgrade cannot be applied.
+ */
 export function upgradeAllSwitchSpeed(state: GameState): GameState {
   const switches = state.devices.filter((device) => device.kind === 'switch')
   const cost = discountedSiteCost(switches.length * 60)

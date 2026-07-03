@@ -1,5 +1,6 @@
 import type { CableTier, DeviceKind, Priority, Scenario } from '../types'
 
+/** Scenario catalog and pacing configuration, in menu display order. */
 export const SCENARIOS: Scenario[] = [
   {
     id: 'home',
@@ -144,14 +145,17 @@ export const WIFI_STANDARDS = [
   { range: 34, pps: 44, cost: 240, name: 'Wi-Fi 6E' },
   { range: 40, pps: 60, cost: 999, name: 'Wi-Fi 7' },
 ]
+/** Repeating client sequence used when scenarios add devices during a run. */
 export const SOURCE_SPAWN_ORDER: DeviceKind[] = ['pc', 'phone', 'console', 'tablet', 'tv']
-/** Matches the native `wifiInterferenceRangeFactor`/`wifiInterferenceThroughputFactor`. */
+/** Multipliers applied to an access point while interference is active. */
 export const WIFI_INTERFERENCE_RANGE_FACTOR = 0.6
+/** Throughput multiplier applied to an access point while interference is active. */
 export const WIFI_INTERFERENCE_PPS_FACTOR = 0.5
 /** Higher weight forwards first under strict-priority admission. */
 export const PRIORITY_WEIGHT: Record<Priority, number> = { realtime: 2, stream: 1, bulk: 0 }
 /** A packet held at a forwarding device's queue longer than this is dropped. */
 export const QUEUE_CAPACITY_TICKS = 6
+/** Infrastructure nodes whose incoming packets are subject to PPS admission limits. */
 export const FORWARDING_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
 /**
  * End-user devices that can join an access point's coverage. Phones and
@@ -160,8 +164,10 @@ export const FORWARDING_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', '
  * connectivity for them.
  */
 export const WIRELESS_CAPABLE_KINDS: DeviceKind[] = ['pc', 'tv', 'console', 'phone', 'tablet']
+/** Clients that cannot be attached by cable because their physical port count is zero. */
 export const WIRELESS_ONLY_KINDS: DeviceKind[] = ['phone', 'tablet']
 
+/** Base hardware capabilities and traffic behavior for each device kind. */
 export const DEVICE_RULES: Record<
   DeviceKind,
   { ports: number; pps: number; priority: Priority; rate: number }
@@ -226,6 +232,7 @@ export const MILESTONES: Record<string, { at: number; award: number }[]> = {
   ],
 }
 
+/** Purchase prices for player-buildable infrastructure; absent kinds cannot be built. */
 export const costs: Partial<Record<DeviceKind, number>> = {
   switch: 80,
   router: 140,
@@ -234,14 +241,18 @@ export const costs: Partial<Record<DeviceKind, number>> = {
   firewall: 110,
 }
 
+/** Fraction of eligible investment returned when equipment or links are removed. */
 export const SALVAGE_RATE = 0.9
+/** Discount applied once to the aggregate price of a site-wide upgrade. */
 export const SITE_UPGRADE_DISCOUNT = 0.15
 
+/** Per-device price of one forwarding-throughput upgrade. */
 export const FORWARDING_SPEED_COSTS: Partial<Record<DeviceKind, number>> = {
   router: 90,
   switch: 60,
   wireless: 50,
 }
+/** PPS gained from one forwarding-throughput upgrade. */
 export const FORWARDING_SPEED_GAIN: Partial<Record<DeviceKind, number>> = {
   router: 8,
   switch: 4,

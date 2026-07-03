@@ -2,6 +2,7 @@ import { ref } from 'vue'
 
 const TUTORIAL_SEEN_KEY = 'networkmaster.tutorial-seen.v1'
 
+/** Ordered onboarding copy displayed by the one-time quick-start card. */
 export const TUTORIAL_STEPS = [
   'Pick a scenario and start a run — every network begins on a clean slate.',
   'Select a device, choose "Begin cable", then tap its destination to wire them together.',
@@ -10,15 +11,29 @@ export const TUTORIAL_STEPS = [
   'Open Site Upgrades for discounted bulk upgrades, and check Run Stats for live delivery telemetry.',
 ]
 
-/** The onboarding card shown once per browser (gated by `TUTORIAL_SEEN_KEY`). */
+/**
+ * Owns onboarding state for the quick-start card shown once per browser.
+ *
+ * @returns Reactive tutorial state and navigation actions.
+ */
 export function useTutorial() {
   const tutorialStep = ref(0)
   const tutorialActive = ref(localStorage.getItem(TUTORIAL_SEEN_KEY) === null)
 
+  /**
+   * Permanently dismisses onboarding for the current browser profile.
+   *
+   * @returns Nothing; reactive and persisted tutorial state are updated.
+   */
   function dismissTutorial() {
     tutorialActive.value = false
     localStorage.setItem(TUTORIAL_SEEN_KEY, '1')
   }
+  /**
+   * Advances to the next card, dismissing onboarding after the final step.
+   *
+   * @returns Nothing; the current step or dismissal state is updated.
+   */
   function advanceTutorial() {
     if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
       dismissTutorial()

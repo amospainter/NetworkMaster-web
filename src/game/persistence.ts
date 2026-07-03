@@ -2,7 +2,12 @@ import type { GameState } from '../types'
 import { DEVICE_RULES, SCENARIOS } from './constants'
 import { createScenarioTopology } from './factories'
 
-/** Creates a fresh, serializable run for the requested scenario. */
+/**
+ * Creates a fresh, serializable run for the requested scenario.
+ *
+ * @param scenario - Scenario identifier; unknown values use the first configured scenario.
+ * @returns A version-current game state with a newly generated topology.
+ */
 export function newGame(scenario = 'home'): GameState {
   const scenarioConfig = SCENARIOS.find((candidate) => candidate.id === scenario) ?? SCENARIOS[0]
   const topology = createScenarioTopology(scenarioConfig.id)
@@ -45,6 +50,9 @@ export function newGame(scenario = 'home'): GameState {
  * Game-over score bonus rewarding a network that stayed intact and kept
  * delivering. Mirrors the native `calculateNetworkHealth`: the product of the
  * surviving-source ratio and the lifetime delivery ratio, scaled to 1000.
+ *
+ * @param state - Completed or in-progress game state to score.
+ * @returns A whole-number bonus from 0 through 1000.
  */
 export function networkHealthBonus(state: GameState): number {
   const sources = state.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0)
@@ -63,6 +71,9 @@ export function networkHealthBonus(state: GameState): number {
  * queue admission; version 5 runs predate cable styles; version 6 runs predate
  * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps.
  * Older or malformed saves are discarded.
+ *
+ * @param savedGame - Parsed persisted state with a schema version.
+ * @returns A current `GameState`, or `null` when migration is unsafe.
  */
 export function migrateSavedGame(
   savedGame: { version: number } & Partial<Omit<GameState, 'version'>>,
