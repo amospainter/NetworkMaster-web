@@ -41,6 +41,7 @@ import {
   repairDevice,
   removeDevice,
   rerouteCable,
+  SALVAGE_RATE,
   SCENARIOS,
   servingWirelessHub,
   siteCableUpgradeFullCost,
@@ -137,6 +138,9 @@ const cableUpgradeCost = computed(() => {
   if (!cable) return 0
   return CABLE_TIERS[CABLE_TIERS.findIndex((t) => t.name === cable.tier)].cost
 })
+const cableSalvageValue = computed(() =>
+  pickedCable.value ? Math.floor(pickedCable.value.upgradeSpend * SALVAGE_RATE) : 0,
+)
 const cableRoutes = computed(() =>
   game.value ? computeCableRoutes(game.value.devices, game.value.cables) : new Map(),
 )
@@ -1046,7 +1050,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                     : `Reroute end (${game.devices.find((d) => d.id === pickedCable!.to)?.label})`
                 }}</button
               ><button class="wide danger-action" @click="deleteSelectedCable">
-                <Trash2 /> Delete · salvage 90%
+                <Trash2 /> Delete · salvage ${{ cableSalvageValue }}
               </button></template
             >
           </div>
