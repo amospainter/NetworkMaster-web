@@ -4,6 +4,7 @@ import {
   Monitor,
   Network,
   Radio,
+  Scale,
   Server,
   Shield,
   Smartphone,
@@ -26,6 +27,7 @@ export const deviceIcons = {
   server: Server,
   firewall: Shield,
   wireless: Wifi,
+  loadBalancer: Scale,
 }
 
 /** Buildable equipment kinds, their button label, and their base cost. */
@@ -35,4 +37,5 @@ export const BUILD_OPTIONS: [DeviceKind, string, number][] = [
   ['wireless', 'Wireless', 90],
   ['firewall', 'Firewall', 110],
   ['server', 'Server', 120],
+  ['loadBalancer', 'Load Balancer', 150],
 ]

@@ -14,7 +14,7 @@ import { createDevice } from './factories'
 import { networkHealthBonus } from './persistence'
 import { findRoute, findRouteThrough, independentPathCount, pickCrossSubnetDest } from './routing'
 import { addEvent, cloneState, createId, distanceBetween } from './utils'
-import { deviceCapacity, hubRange } from './wireless'
+import { buildWirelessAssociations, deviceCapacity, hubRange } from './wireless'
 
 /**
  * Eases demand in over a scenario's opening ticks so the network starts quiet
@@ -330,12 +330,28 @@ export function simulate(state: GameState): GameState {
   nextState.packets = inFlightPackets
   nextState.delivered += deliveredPackets.length
 
+  // Wireless association only depends on device position/status, which is
+  // fixed for the remainder of this tick (newly spawned devices don't
+  // generate traffic until next tick) — resolve it once and share it across
+  // every redundancy check and route lookup below instead of per packet.
+  const wirelessAssociations = buildWirelessAssociations(nextState)
+  const redundancyMemo = new Map<string, number>()
   for (const deliveredPacket of deliveredPackets) {
     const sourceDevice = nextState.devices.find((device) => device.id === deliveredPacket.source)
     if (sourceDevice) sourceDevice.delivered++
     const destinationId = deliveredPacket.path[deliveredPacket.path.length - 1]
-    const redundancyBonus =
-      independentPathCount(nextState, deliveredPacket.source, destinationId) >= 2 ? 5 : 0
+    const redundancyKey = `${deliveredPacket.source}|${destinationId}`
+    let pathCount = redundancyMemo.get(redundancyKey)
+    if (pathCount === undefined) {
+      pathCount = independentPathCount(
+        nextState,
+        deliveredPacket.source,
+        destinationId,
+        wirelessAssociations,
+      )
+      redundancyMemo.set(redundancyKey, pathCount)
+    }
+    const redundancyBonus = pathCount >= 2 ? 5 : 0
     nextState.score += 10 * nextState.multiplier * nextState.combo + redundancyBonus
     const latency = Math.max(0, nextState.tick - deliveredPacket.generatedTick)
     nextState.recentLatencyTicks =
@@ -374,13 +390,19 @@ export function simulate(state: GameState): GameState {
     for (let attempt = 0; attempt < packetAttempts; attempt++) {
       if (Math.random() > 0.24) continue
       sourceDevice.generated++
-      let route = findRoute(nextState, sourceDevice.id, cloud.id)
+      let route = findRoute(nextState, sourceDevice.id, cloud.id, wirelessAssociations)
       // 30% of traffic in multi-subnet scenarios targets another device on the
       // network (e.g. desk-to-server) instead of the cloud, routed via the router.
       if (scenarioConfig.id !== 'home' && Math.random() < 0.3) {
         const crossDest = pickCrossSubnetDest(nextState, sourceDevice)
         if (crossDest) {
-          const crossRoute = findRouteThrough(nextState, sourceDevice.id, router.id, crossDest.id)
+          const crossRoute = findRouteThrough(
+            nextState,
+            sourceDevice.id,
+            router.id,
+            crossDest.id,
+            wirelessAssociations,
+          )
           if (crossRoute) route = crossRoute
         }
       }

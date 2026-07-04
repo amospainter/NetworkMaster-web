@@ -17,8 +17,18 @@ export {
 /** Run creation, score finalization, and persisted-save migration. */
 export { migrateSavedGame, networkHealthBonus, newGame } from './persistence'
 
+/** Starting-topology construction, used by `newGame` and the menu's per-scenario preview diagrams. */
+export { createScenarioTopology } from './factories'
+
 /** Effective wireless capabilities and client-to-access-point resolution. */
-export { deviceCapacity, hubPps, hubRange, servingWirelessHub, wifiInfo } from './wireless'
+export {
+  buildWirelessAssociations,
+  deviceCapacity,
+  hubPps,
+  hubRange,
+  servingWirelessHub,
+  wifiInfo,
+} from './wireless'
 
 /** Operational pathfinding and redundancy inspection. */
 export { findRoute, independentPathCount } from './routing'

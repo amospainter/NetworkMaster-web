@@ -4,6 +4,7 @@ import {
   addCable,
   CABLE_TIERS,
   buildDevice,
+  buildWirelessAssociations,
   cycleCableVlan,
   cycleFirewallRule,
   findRoute,
@@ -35,8 +36,120 @@ describe('NetworkMaster gameplay rules', () => {
         expect(device.ports).toBe(
           game.cables.filter((c) => c.from === device.id || c.to === device.id).length,
         )
+        // No starting cable should exceed either endpoint's port limit.
+        expect(device.ports).toBeLessThanOrEqual(device.maxPorts)
       }
     }
+  })
+
+  it('lists scenarios easiest-to-hardest with Home Network first', () => {
+    expect(SCENARIOS[0].id).toBe('home')
+    for (let i = 1; i < SCENARIOS.length; i++) {
+      expect(SCENARIOS[i].difficulty).toBeGreaterThanOrEqual(SCENARIOS[i - 1].difficulty)
+    }
+  })
+
+  it('starts the Café Hotspot with a 10 Mbps Cloud connection', () => {
+    const game = newGame('cafe')
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    const cloudUplink = game.cables.find(
+      (cable) => cable.from === cloud.id || cable.to === cloud.id,
+    )!
+
+    expect(cloudUplink.tier).toBe('Copper')
+  })
+
+  it('gives the data center two servers on different subnets for east-west traffic', () => {
+    const game = newGame('datacenter')
+    const servers = game.devices.filter((d) => d.kind === 'server')
+    expect(servers).toHaveLength(2)
+    expect(new Set(servers.map((s) => s.subnet)).size).toBe(2)
+  })
+
+  /** Scenarios whose starting topology includes a load balancer (dual-router core). */
+  const dualRouterScenarios = SCENARIOS.filter((s) =>
+    newGame(s.id).devices.some((d) => d.kind === 'loadBalancer'),
+  ).map((s) => s.id)
+
+  it('gives dual-router scenarios a load-balanced core with two Cloud uplinks', () => {
+    expect(dualRouterScenarios).toEqual(['corporate', 'metro', 'isp', 'datacenter', 'smartcity'])
+    for (const scenarioId of dualRouterScenarios) {
+      const game = newGame(scenarioId)
+      const routers = game.devices.filter((d) => d.kind === 'router')
+      const loadBalancer = game.devices.find((d) => d.kind === 'loadBalancer')!
+      const cloud = game.devices.find((d) => d.kind === 'cloud')!
+      expect(routers).toHaveLength(2)
+      expect(loadBalancer).toBeDefined()
+      for (const router of routers) {
+        expect(
+          game.cables.some(
+            (c) =>
+              (c.from === router.id && c.to === cloud.id) ||
+              (c.to === router.id && c.from === cloud.id),
+          ),
+        ).toBe(true)
+        expect(
+          game.cables.some(
+            (c) =>
+              (c.from === router.id && c.to === loadBalancer.id) ||
+              (c.to === router.id && c.from === loadBalancer.id),
+          ),
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('keeps non-dual-router scenarios on a single-router core', () => {
+    for (const scenario of SCENARIOS.filter((s) => !dualRouterScenarios.includes(s.id))) {
+      const game = newGame(scenario.id)
+      expect(game.devices.filter((d) => d.kind === 'router')).toHaveLength(1)
+      expect(game.devices.some((d) => d.kind === 'loadBalancer')).toBe(false)
+    }
+  })
+
+  it('places every scenario’s starting devices without visual overlap', () => {
+    // 8 tolerates the dual-router core's deliberately tight vertical stacks
+    // (Router/Router-B/Load Balancer, dist ~9-10 in corporate/metro); it
+    // still catches a genuine near-collision like the one Router-B briefly
+    // landed on top of the Firewall at.
+    const MIN_DISTANCE = 8
+    for (const scenario of SCENARIOS) {
+      const game = newGame(scenario.id)
+      for (let i = 0; i < game.devices.length; i++) {
+        for (let j = i + 1; j < game.devices.length; j++) {
+          const a = game.devices[i]
+          const b = game.devices[j]
+          expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(MIN_DISTANCE)
+        }
+      }
+    }
+  })
+
+  it('gives every dual-router scenario a visually distinct core layout', () => {
+    const positions = (scenarioId: string) =>
+      newGame(scenarioId)
+        .devices.filter((d) => ['router', 'loadBalancer', 'switch'].includes(d.kind))
+        .map((d) => `${d.x},${d.y}`)
+        .sort()
+        .join('|')
+    const layouts = dualRouterScenarios.map(positions)
+    expect(new Set(layouts).size).toBe(layouts.length)
+  })
+
+  it('spreads a corporate scenario’s outbound traffic across both core routers', () => {
+    const game = newGame('corporate')
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    const [routerA, routerB] = game.devices.filter((d) => d.kind === 'router')
+    const firstSwitch = game.devices.find((d) => d.label === 'SW-A')!
+
+    const secondHopCounts: Record<string, number> = { [routerA.id]: 0, [routerB.id]: 0 }
+    for (let i = 0; i < 300; i++) {
+      const route = findRoute(game, firstSwitch.id, cloud.id)!
+      const routerHop = route.find((id) => id === routerA.id || id === routerB.id)!
+      secondHopCounts[routerHop]++
+    }
+    expect(secondHopCounts[routerA.id]).toBeGreaterThan(60)
+    expect(secondHopCounts[routerB.id]).toBeGreaterThan(60)
   })
 
   it('routes wireless-only clients through an access point in range', () => {
@@ -153,6 +266,22 @@ describe('NetworkMaster gameplay rules', () => {
         expect(c.capacity).toBe(10)
         expect(c.upgradeSpend).toBeGreaterThan(fastEthernetSpend)
       })
+  })
+
+  it('uses the site cable standard for connections added after an upgrade', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((device) => device.kind === 'router')!
+    const pc = game.devices.find((device) => device.kind === 'pc')!
+    const tv = game.devices.find((device) => device.kind === 'tv')!
+
+    game = addCable(game, pc.id, router.id)
+    game = upgradeAllCables(game, 'Gigabit')
+    game = addCable(game, tv.id, router.id)
+
+    const newCable = game.cables.find((cable) => cable.from === tv.id || cable.to === tv.id)!
+    expect(newCable.tier).toBe('Gigabit')
+    expect(newCable.capacity).toBe(10)
   })
 
   it('site cable upgrade extends past Gigabit to 5 Gigabit and beyond', () => {
@@ -410,6 +539,27 @@ describe('NetworkMaster gameplay rules', () => {
     // Hub A already serves firstPhone, so the second phone (in range of both)
     // balances onto the less-loaded hub B instead of the nearer hub A.
     expect(servingWirelessHub(game, secondPhone.id)?.id).toBe(hubB.id)
+    // The batched per-tick resolver must agree with the per-device resolver
+    // it replaces inside simulate()'s hot path.
+    const associations = buildWirelessAssociations(game)
+    expect(associations.get(firstPhone.id)).toBe(hubA.id)
+    expect(associations.get(secondPhone.id)).toBe(hubB.id)
+  })
+
+  it('reuses a precomputed wireless association map across a cable-filtered clone', () => {
+    let game = newGame('home')
+    game.budget = 1000
+    const pc = game.devices.find((d) => d.kind === 'pc')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = addCable(game, pc.id, router.id)
+    game = buildDevice(game, 'wireless', pc.x, pc.y)
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    const associations = buildWirelessAssociations(game)
+    // independentPathCount removes the primary route's cable edges before its
+    // second findRoute call; passing the same map must still find the Wi-Fi
+    // backup path since wireless association doesn't depend on cables.
+    expect(independentPathCount(game, pc.id, router.id, associations)).toBe(2)
   })
 
   it('shrinks wireless coverage and throughput while a hub is interfered', () => {
@@ -535,6 +685,89 @@ describe('NetworkMaster gameplay rules', () => {
 
     game = cycleFirewallRule(game, firewall.id) // block PC traffic
     expect(findRoute(game, pc.id, cloud.id)).toBeNull()
+  })
+
+  it('builds a load balancer as a 4-port forwarding node that bridges end devices', () => {
+    let game = newGame('home')
+    game.budget = 500
+    const budgetBefore = game.budget
+    game = buildDevice(game, 'loadBalancer')
+    const loadBalancer = game.devices.find((device) => device.kind === 'loadBalancer')!
+    expect(loadBalancer.maxPorts).toBe(4)
+    expect(loadBalancer.pps).toBe(24)
+    expect(game.budget).toBe(budgetBefore - 150)
+
+    const pc = game.devices.find((device) => device.kind === 'pc')!
+    const router = game.devices.find((device) => device.kind === 'router')!
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    game = addCable(game, pc.id, loadBalancer.id)
+    game = addCable(game, loadBalancer.id, router.id)
+    expect(findRoute(game, pc.id, cloud.id)).not.toBeNull()
+  })
+
+  it('spreads outbound traffic across a load balancer’s equally-short branches', () => {
+    let game = newGame('home')
+    game.budget = 1000
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    const routerA = game.devices.find((device) => device.kind === 'router')!
+    game = buildDevice(game, 'router')
+    const routerB = game.devices.find(
+      (device) => device.kind === 'router' && device.id !== routerA.id,
+    )!
+    game = buildDevice(game, 'loadBalancer')
+    const loadBalancer = game.devices.find((device) => device.kind === 'loadBalancer')!
+    const pc = game.devices.find((device) => device.kind === 'pc')!
+    game = addCable(game, routerB.id, cloud.id) // cloud's second port
+    game = addCable(game, loadBalancer.id, routerA.id)
+    game = addCable(game, loadBalancer.id, routerB.id)
+    game = addCable(game, pc.id, loadBalancer.id)
+
+    const secondHopCounts: Record<string, number> = { [routerA.id]: 0, [routerB.id]: 0 }
+    for (let i = 0; i < 300; i++) {
+      const route = findRoute(game, pc.id, cloud.id)!
+      secondHopCounts[route[2]]++
+    }
+    // A fixed BFS tie-break would always pick one branch and leave the other
+    // at 0; both equally-short router/Cloud branches should see real traffic.
+    expect(secondHopCounts[routerA.id]).toBeGreaterThan(60)
+    expect(secondHopCounts[routerB.id]).toBeGreaterThan(60)
+  })
+
+  it('humanizes a camelCase device kind in the placement event log', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'loadBalancer')
+    expect(game.events[0].text).toBe('load balancer placed. Drag it into position.')
+  })
+
+  it('rejects a load balancer connecting directly to the Cloud Edge', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'loadBalancer')
+    const loadBalancer = game.devices.find((device) => device.kind === 'loadBalancer')!
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    const cablesBefore = game.cables.length
+    game = addCable(game, loadBalancer.id, cloud.id)
+    expect(game.cables).toHaveLength(cablesBefore)
+    expect(game.events[0].text).toContain('router')
+  })
+
+  it('upgrades load balancer throughput and refunds its salvage value on removal', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'loadBalancer')
+    const loadBalancer = game.devices.find((device) => device.kind === 'loadBalancer')!
+    const budgetBeforeUpgrade = game.budget
+    const ppsBeforeUpgrade = loadBalancer.pps
+    game = upgradeDeviceSpeed(game, loadBalancer.id)
+    const upgraded = game.devices.find((device) => device.id === loadBalancer.id)!
+    expect(upgraded.pps).toBe(ppsBeforeUpgrade + 10)
+    expect(game.budget).toBe(budgetBeforeUpgrade - 100)
+
+    game = removeDevice(game, loadBalancer.id)
+    expect(game.devices.some((device) => device.id === loadBalancer.id)).toBe(false)
+    // 90% salvage of ($150 build + $100 upgrade spend).
+    expect(game.budget).toBe(budgetBeforeUpgrade - 100 + 225)
   })
 
   it('reroutes a cable endpoint while preserving tier and VLAN', () => {

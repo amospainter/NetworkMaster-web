@@ -1,5 +1,5 @@
-import type { CableStyle, Device, DeviceKind, GameState } from '../types'
-import { costs, SALVAGE_RATE, WIRELESS_ONLY_KINDS } from './constants'
+import type { CableStyle, CableTier, Device, DeviceKind, GameState } from '../types'
+import { CABLE_TIERS, costs, SALVAGE_RATE, WIRELESS_ONLY_KINDS } from './constants'
 import { createCable, createDevice } from './factories'
 import { addEvent, cloneState, event } from './utils'
 
@@ -13,7 +13,32 @@ const isEndDevice = (device: Device): boolean =>
   ['pc', 'tv', 'console', 'server'].includes(device.kind)
 
 /**
- * Validates topology rules and adds a new base-tier connection.
+ * Splits a camelCase device kind into lowercase words for event-log prose
+ * (e.g. `loadBalancer` -> `load balancer`); single-word kinds pass through unchanged.
+ *
+ * @param kind - Device kind to humanize.
+ * @returns Space-separated, lowercase kind name.
+ */
+const humanizeKind = (kind: DeviceKind): string => kind.replace(/([A-Z])/g, ' $1').toLowerCase()
+
+/**
+ * Returns the lowest cable tier currently used across the site's non-Cloud
+ * links. Once every site link has reached a tier, new links inherit it and
+ * cannot silently reintroduce an older standard.
+ */
+const siteCableTier = (state: GameState): CableTier => {
+  const cloudId = state.devices.find((device) => device.kind === 'cloud')?.id
+  const siteCables = state.cables.filter((cable) => cable.from !== cloudId && cable.to !== cloudId)
+  if (!siteCables.length) return 'Copper'
+  return siteCables.reduce((lowest, cable) => {
+    const lowestIndex = CABLE_TIERS.findIndex((tier) => tier.name === lowest)
+    const cableIndex = CABLE_TIERS.findIndex((tier) => tier.name === cable.tier)
+    return cableIndex < lowestIndex ? cable.tier : lowest
+  }, siteCables[0].tier)
+}
+
+/**
+ * Validates topology rules and adds a connection at the site's current cable standard.
  *
  * @param state - Current game state.
  * @param from - First endpoint identifier.
@@ -25,7 +50,7 @@ export function addCable(
   state: GameState,
   from: string,
   to: string,
-  style: CableStyle = 'rightAngle',
+  style: CableStyle = 'diagonal',
 ): GameState {
   const s = cloneState(state),
     a = s.devices.find((d) => d.id === from),
@@ -62,7 +87,7 @@ export function addCable(
         6,
       ),
     }
-  s.cables.push(createCable(a, b, 'Copper', null, style))
+  s.cables.push(createCable(a, b, siteCableTier(state), null, style))
   a.ports++
   b.ports++
   s.packets = []
@@ -183,7 +208,7 @@ export function buildDevice(state: GameState, kind: DeviceKind, x = 50, y = 55):
     count = s.devices.filter((d) => d.kind === kind).length + 1
   s.devices.push(createDevice(kind, `${kind[0].toUpperCase() + kind.slice(1)}-${count}`, x, y))
   s.budget -= cost
-  addEvent(s, `${kind} placed. Drag it into position.`)
+  addEvent(s, `${humanizeKind(kind)} placed. Drag it into position.`)
   return s
 }
 

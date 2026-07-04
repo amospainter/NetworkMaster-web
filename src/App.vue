@@ -15,7 +15,10 @@ import { computeCableRoutes, pointAlongRoute, routeToSvgPath } from './cableGeom
 import BuildPanel from './components/BuildPanel.vue'
 import GameHud from './components/GameHud.vue'
 import GameOverModal from './components/GameOverModal.vue'
+import HoverTooltip from './components/HoverTooltip.vue'
 import MenuScreen from './components/MenuScreen.vue'
+import PacketLayer from './components/PacketLayer.vue'
+import ScenarioBriefing from './components/ScenarioBriefing.vue'
 import { useCanvasPanZoom } from './composables/useCanvasPanZoom'
 import { LEADERBOARD_SIZE, useLeaderboard } from './composables/useLeaderboard'
 import { useOfflineBlink } from './composables/useOfflineBlink'
@@ -56,7 +59,7 @@ import {
   wifiInfo,
   WIRELESS_CAPABLE_KINDS,
 } from './game'
-import type { CableTier, Device, DeviceKind, GameState } from './types'
+import type { Cable, CableTier, Device, DeviceKind, GameState } from './types'
 
 const ACTIVE_RUN_STORAGE_KEY = 'networkmaster.active-run.v1'
 const HIGH_SCORE_STORAGE_KEY = 'networkmaster.best.v1'
@@ -82,6 +85,17 @@ function cableTierLabel(tier: CableTier): string {
   return tier === 'Copper' ? 'Ethernet' : tier
 }
 /**
+ * Presents a device kind as spaced, uppercase words for the inspector header
+ * (e.g. `loadBalancer` -> `LOAD BALANCER`) instead of squishing multi-word
+ * kinds together with a plain `.toUpperCase()`.
+ *
+ * @param kind - Persisted device kind.
+ * @returns Player-facing, space-separated uppercase label.
+ */
+function deviceKindLabel(kind: DeviceKind): string {
+  return kind.replace(/([A-Z])/g, ' $1').toUpperCase()
+}
+/**
  * Loads and migrates the active run from local storage.
  *
  * @returns A compatible game state, or `null` for missing/malformed saves.
@@ -100,7 +114,7 @@ const screen = ref<'menu' | 'game'>('menu')
 const game = ref<GameState | null>(loadSavedGame())
 const selected = ref<string | null>(null)
 const cableStart = ref<string | null>(null)
-const cableStyle = ref<'rightAngle' | 'diagonal'>('rightAngle')
+const cableStyle = ref<'rightAngle' | 'diagonal'>('diagonal')
 /** Set while rerouting an existing cable's endpoint; cleared once a target device is chosen. */
 const reroutingCable = ref<{ cableId: string; movingFromEnd: boolean } | null>(null)
 /** Armed build-panel tool; while set, canvas clicks stamp a new device at the cursor. */
@@ -151,7 +165,30 @@ const wirelessConnections = computed(() => {
     .map((device) => ({ device, hub: servingWirelessHub(game.value!, device.id) }))
     .filter((connection) => connection.hub !== null)
 })
-
+/** All access points, shared by the Wi-Fi zone layer and minimap so both avoid re-filtering devices per render. */
+const wirelessHubs = computed(() => game.value?.devices.filter((d) => d.kind === 'wireless') ?? [])
+/** O(1) device lookup by id, shared by the minimap's per-cable endpoint resolution. */
+const deviceById = computed(() => {
+  const byId = new Map<string, Device>()
+  for (const device of game.value?.devices ?? []) byId.set(device.id, device)
+  return byId
+})
+/**
+ * Serving access-point label per wireless-capable client, resolved once per
+ * game-state change instead of once per template binding — the canvas badge
+ * and inspector each read a client's label from two separate expressions.
+ */
+const wirelessHubLabelById = computed(() => {
+  const labels = new Map<string, string>()
+  const currentGame = game.value
+  if (!currentGame) return labels
+  for (const device of currentGame.devices) {
+    if (!WIRELESS_CAPABLE_KINDS.includes(device.kind)) continue
+    const hub = servingWirelessHub(currentGame, device.id)
+    if (hub) labels.set(device.id, hub.label)
+  }
+  return labels
+})
 /**
  * Returns the label of the access point currently serving a client.
  *
@@ -159,7 +196,7 @@ const wirelessConnections = computed(() => {
  * @returns Serving access-point label, or `null` when uncovered.
  */
 function wirelessHubLabel(deviceId: string): string | null {
-  return game.value ? (servingWirelessHub(game.value, deviceId)?.label ?? null) : null
+  return wirelessHubLabelById.value.get(deviceId) ?? null
 }
 /**
  * Calculates an access point's coverage-circle diameter.
@@ -183,7 +220,7 @@ function queueDepth(deviceId: string): number {
     .length
 }
 
-const THROUGHPUT_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall']
+const THROUGHPUT_KINDS: DeviceKind[] = ['router', 'switch', 'wireless', 'firewall', 'loadBalancer']
 
 const SPEED_OPTIONS = [0.5, 1, 2, 3]
 /**
@@ -194,9 +231,34 @@ const SPEED_OPTIONS = [0.5, 1, 2, 3]
 function cycleSpeed() {
   if (!game.value) return
   const next = SPEED_OPTIONS[(SPEED_OPTIONS.indexOf(game.value.speed) + 1) % SPEED_OPTIONS.length]
-  game.value.speed = next
+  game.value = { ...game.value, speed: next }
 }
 
+/**
+ * Toggles between playing and paused.
+ *
+ * Replaces the game object rather than mutating `phase` in place so the
+ * (shallow) persistence watcher below observes the change via reassignment.
+ *
+ * @returns Nothing; game state is replaced with a new object when a game exists.
+ */
+function togglePause() {
+  if (!game.value) return
+  game.value = { ...game.value, phase: game.value.phase === 'playing' ? 'paused' : 'playing' }
+}
+
+/**
+ * Sums attached-cable load per device in a single pass over `game.cables`,
+ * rather than the canvas/inspector re-filtering all cables per device shown.
+ */
+const deviceThroughputUsedById = computed(() => {
+  const usage = new Map<string, number>()
+  for (const networkCable of game.value?.cables ?? []) {
+    usage.set(networkCable.from, (usage.get(networkCable.from) ?? 0) + networkCable.load)
+    usage.set(networkCable.to, (usage.get(networkCable.to) ?? 0) + networkCable.load)
+  }
+  return usage
+})
 /**
  * Totals current traffic over a forwarding device's attached cables.
  *
@@ -204,12 +266,21 @@ function cycleSpeed() {
  * @returns Aggregate packets per tick across attached cables.
  */
 function deviceThroughputUsed(device: Device): number {
-  if (!game.value) return 0
-  return game.value.cables
-    .filter((c) => c.from === device.id || c.to === device.id)
-    .reduce((total, c) => total + c.load, 0)
+  return deviceThroughputUsedById.value.get(device.id) ?? 0
 }
 
+/** Throughput ratio per forwarding device, resolved once per game-state change. */
+const throughputRatioById = computed(() => {
+  const ratios = new Map<string, number>()
+  for (const device of game.value?.devices ?? []) {
+    if (!THROUGHPUT_KINDS.includes(device.kind)) continue
+    ratios.set(
+      device.id,
+      (deviceThroughputUsedById.value.get(device.id) ?? 0) / deviceCapacity(device),
+    )
+  }
+  return ratios
+})
 /**
  * Calculates the utilization ratio used by canvas and inspector throughput bars.
  *
@@ -217,7 +288,7 @@ function deviceThroughputUsed(device: Device): number {
  * @returns Load divided by effective capacity; may exceed one.
  */
 function throughputRatio(device: Device): number {
-  return deviceThroughputUsed(device) / deviceCapacity(device)
+  return throughputRatioById.value.get(device.id) ?? 0
 }
 
 const {
@@ -276,28 +347,69 @@ function handleContextMenu(event: MouseEvent) {
   event.preventDefault()
   if (placingKind.value) cancelPlacing()
 }
+/**
+ * Flushes any pending debounced save immediately.
+ *
+ * @returns Nothing; local storage is updated when a game exists.
+ */
+function flushActiveRunPersist() {
+  if (persistTimer !== undefined) {
+    clearTimeout(persistTimer)
+    persistTimer = undefined
+  }
+  if (game.value) localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, JSON.stringify(game.value))
+}
+/**
+ * Flushes a pending save when the tab is backgrounded, so a rapid sequence of
+ * changes (e.g. a device drag) isn't lost if the page is closed mid-debounce.
+ *
+ * @returns Nothing; local storage may be updated.
+ */
+function handleVisibilityChange() {
+  if (document.hidden) flushActiveRunPersist()
+}
 onMounted(() => {
   window.addEventListener('keydown', handleEscapeKey)
   window.addEventListener('contextmenu', handleContextMenu)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('pagehide', flushActiveRunPersist)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleEscapeKey)
   window.removeEventListener('contextmenu', handleContextMenu)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('pagehide', flushActiveRunPersist)
+  flushActiveRunPersist()
 })
 
-/** Persists the active run and tracks the personal best on every change. */
-watch(
-  game,
-  (currentGame) => {
-    if (!currentGame) return
-    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, JSON.stringify(currentGame))
-    if (currentGame.score > best.value) {
-      best.value = currentGame.score
-      localStorage.setItem(HIGH_SCORE_STORAGE_KEY, String(currentGame.score))
-    }
-  },
-  { deep: true },
-)
+const PERSIST_DEBOUNCE_MS = 400
+let persistTimer: number | undefined
+/**
+ * Arms a trailing-debounced local storage write so a burst of rapid state
+ * changes (dragging a device, a run of simulation ticks) collapses into one
+ * write instead of one synchronous `JSON.stringify` + write per change.
+ *
+ * @returns Nothing; a pending write timer is (re)armed.
+ */
+function scheduleActiveRunPersist() {
+  if (persistTimer !== undefined) clearTimeout(persistTimer)
+  persistTimer = window.setTimeout(flushActiveRunPersist, PERSIST_DEBOUNCE_MS)
+}
+
+/**
+ * Tracks the personal best immediately and persists the active run (debounced)
+ * on every change. Every reducer replaces `game.value` wholesale, so a shallow
+ * watch — rather than `deep: true` — is sufficient and avoids Vue re-traversing
+ * the full state tree on every trigger.
+ */
+watch(game, (currentGame) => {
+  if (!currentGame) return
+  if (currentGame.score > best.value) {
+    best.value = currentGame.score
+    localStorage.setItem(HIGH_SCORE_STORAGE_KEY, String(currentGame.score))
+  }
+  scheduleActiveRunPersist()
+})
 
 /**
  * Starts a fresh run and clears transient canvas selection.
@@ -310,6 +422,19 @@ function start(scenarioId: string) {
   screen.value = 'game'
   selected.value = null
   canvasInteractionCount.value = 0
+  briefingActive.value = true
+}
+/** Scenario metadata for the currently active run, if any. */
+const activeScenario = computed(() => SCENARIOS.find((s) => s.id === game.value?.scenario))
+/** Shown once per run start with that scenario's objective and first steps. */
+const briefingActive = ref(false)
+/**
+ * Dismisses the start-of-run scenario briefing.
+ *
+ * @returns Nothing; briefing visibility state is cleared.
+ */
+function dismissBriefing() {
+  briefingActive.value = false
 }
 const CANVAS_HINT_ACTIONS = 4
 /** Counts canvas interactions so the idle "select a device" hint can fade out. */
@@ -498,10 +623,7 @@ const siteSwitchSpeedCost = computed(() =>
  */
 function continueUnscored() {
   if (!game.value) return
-  game.value.phase = 'playing'
-  game.value.unscored = true
-  game.value.failure = 0
-  game.value.recentDrops = []
+  game.value = { ...game.value, phase: 'playing', unscored: true, failure: 0, recentDrops: [] }
 }
 /**
  * Returns the SVG path selected by the cable router.
@@ -526,37 +648,94 @@ function cableLabelPos(cableId: string): { x: number; y: number } {
   return pointAlongRoute(route.points, 0.5)
 }
 
-/**
- * Maps packet progress onto the routed geometry of its current cable.
- *
- * @param path - Packet's ordered device-id route.
- * @param hop - Index of the packet's current device.
- * @param progress - Normalized progress toward the next hop.
- * @returns Interpolated normalized canvas position.
- */
-function packetPos(path: string[], hop: number, progress: number) {
-  if (!game.value) return { x: 0, y: 0 }
-  const currentDeviceId = path[hop]
-  const nextDeviceId = path[hop + 1]
-  const networkCable = game.value.cables.find(
-    (candidate) =>
-      (candidate.from === currentDeviceId && candidate.to === nextDeviceId) ||
-      (candidate.to === currentDeviceId && candidate.from === nextDeviceId),
-  )
-  if (!networkCable) {
-    const currentDevice = game.value.devices.find((device) => device.id === currentDeviceId)
-    const nextDevice = game.value.devices.find((device) => device.id === nextDeviceId)
-    if (!currentDevice || !nextDevice) return { x: 0, y: 0 }
-    return {
-      x: currentDevice.x + (nextDevice.x - currentDevice.x) * progress,
-      y: currentDevice.y + (nextDevice.y - currentDevice.y) * progress,
-    }
+/** Hovered equipment/connection for the floating info tooltip; mutually exclusive. */
+const hoveredDeviceId = ref<string | null>(null)
+const hoveredCableId = ref<string | null>(null)
+/** Fixed (viewport) pixel position for the tooltip, independent of canvas pan/zoom. */
+const hoverPos = ref({ x: 0, y: 0 })
+
+/** Tooltip content for the hovered device, or `null` when none is hovered. */
+const hoverDeviceInfo = computed(() => {
+  const device = game.value?.devices.find((candidate) => candidate.id === hoveredDeviceId.value)
+  if (!device) return null
+  const used = deviceThroughputUsedById.value.get(device.id) ?? 0
+  const capacity = deviceCapacity(device)
+  return {
+    title: device.label,
+    rows: [
+      { label: 'Status', value: device.offline ? 'Offline' : 'Online' },
+      { label: 'Ports', value: `${device.ports} / ${device.maxPorts}` },
+      { label: 'Health / wear', value: `${device.health}% / ${device.wear}` },
+      {
+        label: 'Throughput',
+        value: capacity > 100 ? 'No limit' : `${used} / ${capacity} pkt/tick`,
+      },
+    ],
   }
-  const route = cableRoutes.value.get(networkCable.id)
-  if (!route) return { x: 0, y: 0 }
-  const points = networkCable.from === currentDeviceId ? route.points : [...route.points].reverse()
-  return pointAlongRoute(points, progress)
+})
+/** Tooltip content for the hovered cable, or `null` when none is hovered. */
+const hoverCableInfo = computed(() => {
+  const cable = game.value?.cables.find((candidate) => candidate.id === hoveredCableId.value)
+  if (!cable) return null
+  const from = deviceById.value.get(cable.from)
+  const to = deviceById.value.get(cable.to)
+  return {
+    title: `${from?.label ?? '?'} ↔ ${to?.label ?? '?'}`,
+    rows: [
+      { label: 'Tier', value: cableTierLabel(cable.tier) },
+      { label: 'Status', value: cable.status },
+      { label: 'Age', value: `${cable.age} ticks` },
+    ],
+  }
+})
+/** The single active tooltip payload, if any device or cable is currently hovered. */
+const hoverInfo = computed(() => hoverDeviceInfo.value ?? hoverCableInfo.value)
+
+/**
+ * Clears any active hover tooltip.
+ *
+ * @returns Nothing; hovered device/cable state is cleared.
+ */
+function hideTooltip() {
+  hoveredDeviceId.value = null
+  hoveredCableId.value = null
 }
+/**
+ * Arms the device tooltip, anchored above the hovered device's own screen position.
+ *
+ * @param event - Device pointer-enter event.
+ * @param device - Device being hovered.
+ * @returns Nothing; hover and tooltip-position state are updated.
+ */
+function showDeviceTooltip(event: PointerEvent, device: Device) {
+  hoveredCableId.value = null
+  hoveredDeviceId.value = device.id
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  hoverPos.value = { x: rect.left + rect.width / 2, y: rect.top }
+}
+/**
+ * Arms the cable tooltip at the pointer's current position.
+ *
+ * @param event - Cable pointer-enter or pointer-move event.
+ * @param cable - Cable being hovered.
+ * @returns Nothing; hover and tooltip-position state are updated.
+ */
+function showCableTooltip(event: PointerEvent, cable: Cable) {
+  hoveredDeviceId.value = null
+  hoveredCableId.value = cable.id
+  hoverPos.value = { x: event.clientX, y: event.clientY }
+}
+/**
+ * Follows the pointer while a cable tooltip is active.
+ *
+ * @param event - Cable pointer-move event.
+ * @returns Nothing; tooltip position is updated when a cable is hovered.
+ */
+function trackCableTooltip(event: PointerEvent) {
+  if (!hoveredCableId.value) return
+  hoverPos.value = { x: event.clientX, y: event.clientY }
+}
+
 let activeDrag: { id: string; startX: number; startY: number; moved: boolean } | null = null
 /**
  * Captures a device pointer unless another active tool owns the gesture.
@@ -568,6 +747,7 @@ let activeDrag: { id: string; startX: number; startY: number; moved: boolean } |
 function startDeviceDrag(event: PointerEvent, device: Device) {
   if (cableStart.value || placingKind.value) return
   event.stopPropagation() // don't also start a background canvas pan
+  hideTooltip()
   activeDrag = { id: device.id, startX: event.clientX, startY: event.clientY, moved: false }
   ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
 }
@@ -630,7 +810,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         @open-upgrades="modal = 'upgrades'"
         @open-help="modal = 'help'"
         @exit-to-menu="screen = 'menu'"
-        @toggle-pause="game.phase = game.phase === 'playing' ? 'paused' : 'playing'"
+        @toggle-pause="togglePause"
         @open-leaderboard="modal = 'leaderboard'"
       />
       <div class="workspace" :class="{ 'inspector-open': picked || pickedCable }">
@@ -653,6 +833,9 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 :key="c.id"
                 @pointerdown.stop
                 @click="!placingKind && (selected = c.id)"
+                @pointerenter="showCableTooltip($event, c)"
+                @pointermove="trackCableTooltip"
+                @pointerleave="hideTooltip"
               >
                 <path class="link-hit" :d="cablePath(c.id)" />
                 <path :class="[c.status, { selected: selected === c.id }]" :d="cablePath(c.id)" />
@@ -678,7 +861,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               ><span>{{ c.load }}/{{ c.capacity }} pkt</span>
             </div>
             <div
-              v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
+              v-for="hub in wirelessHubs"
               :key="'zone-' + hub.id"
               class="wifi-zone"
               :class="{ interfered: hub.interference > 0 }"
@@ -708,6 +891,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               @pointerdown="startDeviceDrag($event, d)"
               @pointermove="moveDraggedDevice"
               @pointerup="finishDeviceDrag($event, d)"
+              @pointerenter="showDeviceTooltip($event, d)"
+              @pointerleave="hideTooltip"
               @click.prevent
             >
               <span
@@ -734,15 +919,12 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 />
               </div>
             </button>
-            <i
-              v-for="p in game.packets"
-              :key="p.id"
-              class="packet"
-              :class="p.priority"
-              :style="{
-                left: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).x + '%',
-                top: packetPos(p.path, p.hop, packetVisualProgress(p.progress)).y + '%',
-              }"
+            <PacketLayer
+              :packets="game.packets"
+              :devices="game.devices"
+              :cables="game.cables"
+              :cable-routes="cableRoutes"
+              :packet-visual-progress="packetVisualProgress"
             />
             <div
               v-if="placingKind && ghostPos"
@@ -753,6 +935,13 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               <span><component :is="deviceIcons[placingKind]" /></span>
             </div>
           </div>
+          <HoverTooltip
+            v-if="hoverInfo"
+            :x="hoverPos.x"
+            :y="hoverPos.y"
+            :title="hoverInfo.title"
+            :rows="hoverInfo.rows"
+          />
           <div v-if="cableStart || canvasHintVisible" class="canvas-note">
             <CableIcon />{{
               cableStart ? 'Choose a destination device' : 'Select a device to inspect or connect'
@@ -782,7 +971,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             </div>
             <svg class="minimap-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
               <circle
-                v-for="hub in game.devices.filter((d) => d.kind === 'wireless')"
+                v-for="hub in wirelessHubs"
                 :key="'mini-zone-' + hub.id"
                 :cx="hub.x"
                 :cy="hub.y"
@@ -793,10 +982,10 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               <line
                 v-for="c in game.cables"
                 :key="'mini-' + c.id"
-                :x1="game.devices.find((d) => d.id === c.from)?.x"
-                :y1="game.devices.find((d) => d.id === c.from)?.y"
-                :x2="game.devices.find((d) => d.id === c.to)?.x"
-                :y2="game.devices.find((d) => d.id === c.to)?.y"
+                :x1="deviceById.get(c.from)?.x"
+                :y1="deviceById.get(c.from)?.y"
+                :x2="deviceById.get(c.to)?.x"
+                :y2="deviceById.get(c.to)?.y"
               />
               <rect
                 v-for="d in game.devices"
@@ -810,7 +999,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               />
             </svg>
           </div>
-          <div v-if="tutorialActive" class="tutorial-card" @pointerdown.stop>
+          <div v-if="tutorialActive && !briefingActive" class="tutorial-card" @pointerdown.stop>
             <p class="overline">
               QUICK START · STEP {{ tutorialStep + 1 }} / {{ TUTORIAL_STEPS.length }}
             </p>
@@ -834,7 +1023,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 <span><component :is="deviceIcons[picked.kind]" /></span>
                 <div>
                   <h2>{{ picked.label }}</h2>
-                  <p>{{ picked.kind.toUpperCase() }} · SUBNET {{ picked.subnet }}</p>
+                  <p>{{ deviceKindLabel(picked.kind) }} · SUBNET {{ picked.subnet }}</p>
                 </div>
               </div>
               <div class="stat">
@@ -946,6 +1135,17 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                     >{{ wifiInfo(picked)!.cost >= 999 ? 'MAX' : '$' + wifiInfo(picked)!.cost }}</b
                   >
                 </button>
+                <button
+                  :disabled="game.budget < FORWARDING_SPEED_COSTS[picked.kind]!"
+                  @click="setGame(upgradeDeviceSpeed(game!, picked!.id))"
+                >
+                  Throughput +{{ FORWARDING_SPEED_GAIN[picked.kind] }} pkt/tick
+                  <b :class="{ 'danger-text': game.budget < FORWARDING_SPEED_COSTS[picked.kind]! }"
+                    >${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b
+                  >
+                </button>
+              </div>
+              <div v-if="picked.kind === 'loadBalancer'" class="device-upgrades">
                 <button
                   :disabled="game.budget < FORWARDING_SPEED_COSTS[picked.kind]!"
                   @click="setGame(upgradeDeviceSpeed(game!, picked!.id))"
@@ -1078,6 +1278,11 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         ><button @click="modal = 'stats'">RUN STATS</button>
       </footer>
     </div>
+    <ScenarioBriefing
+      v-if="briefingActive && activeScenario"
+      :scenario="activeScenario"
+      @dismiss="dismissBriefing"
+    />
     <GameOverModal
       v-if="game?.phase === 'gameover'"
       :game="game"

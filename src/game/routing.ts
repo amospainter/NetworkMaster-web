@@ -1,7 +1,7 @@
 import type { Device, GameState } from '../types'
-import { DEVICE_RULES, WIRELESS_CAPABLE_KINDS } from './constants'
+import { DEVICE_RULES } from './constants'
 import { cloneState } from './utils'
-import { findWirelessHub } from './wireless'
+import { buildWirelessAssociations } from './wireless'
 
 /**
  * Finds a shortest operational route using breadth-first search.
@@ -13,12 +13,16 @@ import { findWirelessHub } from './wireless'
  * @param state - Current topology and operational state.
  * @param sourceId - Origin device identifier.
  * @param destinationId - Destination device identifier.
+ * @param wirelessAssociations - Precomputed client-to-hub map for this state;
+ *   built internally when omitted. Callers resolving many routes against the
+ *   same state (a simulation tick) should build this once and share it.
  * @returns The shortest device-id path, or `null` when no route exists.
  */
 export function findRoute(
   state: GameState,
   sourceId: string,
   destinationId: string,
+  wirelessAssociations?: Map<string, string>,
 ): string[] | null {
   const source = state.devices.find((device) => device.id === sourceId)
   if (!source) return null
@@ -55,12 +59,25 @@ export function findRoute(
         addEdge(networkCable.from, networkCable.to)
       }
     }
-  const wirelessDevices = state.devices.filter((device) =>
-    WIRELESS_CAPABLE_KINDS.includes(device.kind),
-  )
-  for (const wirelessDevice of wirelessDevices) {
-    const accessPoint = findWirelessHub(state, wirelessDevice)
-    if (accessPoint) addEdge(wirelessDevice.id, accessPoint.id)
+  const associations = wirelessAssociations ?? buildWirelessAssociations(state)
+  for (const [clientId, hubId] of associations) addEdge(clientId, hubId)
+
+  // BFS otherwise always resolves a tie between equally-short branches the
+  // same way (cable/device iteration order), so a load balancer with two
+  // downstream paths of equal length (e.g. two router/Cloud uplinks) would
+  // always send every packet down the same one. Shuffling a load balancer's
+  // edge order per call means each independently resolved packet (simulate()
+  // calls findRoute once per packet) races down a differently-ordered branch
+  // list, so traffic actually spreads across the tied branches over time.
+  // Regular forwarding devices keep deterministic shortest-path behavior.
+  for (const device of state.devices) {
+    if (device.kind !== 'loadBalancer') continue
+    const neighbors = adjacency.get(device.id)
+    if (!neighbors || neighbors.length < 2) continue
+    for (let i = neighbors.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[neighbors[i], neighbors[j]] = [neighbors[j], neighbors[i]]
+    }
   }
 
   const queue: [string, string[]][] = [[sourceId, [sourceId]]]
@@ -85,10 +102,19 @@ export function findRoute(
  * @param state - Current topology and operational state.
  * @param sourceId - Origin device identifier.
  * @param destinationId - Destination device identifier.
+ * @param wirelessAssociations - Precomputed client-to-hub map; built internally
+ *   when omitted. Safe to reuse across the cable-filtered clone below, since
+ *   removing cable edges cannot change which hub a client associates with.
  * @returns Zero for no path, one for a single path, or two when a backup exists.
  */
-export function independentPathCount(state: GameState, sourceId: string, destinationId: string) {
-  const primaryRoute = findRoute(state, sourceId, destinationId)
+export function independentPathCount(
+  state: GameState,
+  sourceId: string,
+  destinationId: string,
+  wirelessAssociations?: Map<string, string>,
+) {
+  const associations = wirelessAssociations ?? buildWirelessAssociations(state)
+  const primaryRoute = findRoute(state, sourceId, destinationId, associations)
   if (!primaryRoute) return 0
   const primaryEdges = new Set(
     primaryRoute
@@ -99,7 +125,7 @@ export function independentPathCount(state: GameState, sourceId: string, destina
   stateWithoutPrimaryRoute.cables = stateWithoutPrimaryRoute.cables.filter(
     (networkCable) => !primaryEdges.has([networkCable.from, networkCable.to].sort().join('|')),
   )
-  return findRoute(stateWithoutPrimaryRoute, sourceId, destinationId) ? 2 : 1
+  return findRoute(stateWithoutPrimaryRoute, sourceId, destinationId, associations) ? 2 : 1
 }
 
 /**
@@ -127,6 +153,8 @@ export function pickCrossSubnetDest(state: GameState, source: Device): Device | 
  * @param sourceId - Origin device identifier.
  * @param viaId - Required intermediate device identifier.
  * @param destinationId - Destination device identifier.
+ * @param wirelessAssociations - Precomputed client-to-hub map; built internally
+ *   when omitted, then shared across both route segments.
  * @returns The combined route, or `null` when either route segment is unavailable.
  */
 export function findRouteThrough(
@@ -134,9 +162,11 @@ export function findRouteThrough(
   sourceId: string,
   viaId: string,
   destinationId: string,
+  wirelessAssociations?: Map<string, string>,
 ): string[] | null {
-  const toVia = findRoute(state, sourceId, viaId)
-  const fromVia = findRoute(state, viaId, destinationId)
+  const associations = wirelessAssociations ?? buildWirelessAssociations(state)
+  const toVia = findRoute(state, sourceId, viaId, associations)
+  const fromVia = findRoute(state, viaId, destinationId, associations)
   if (!toVia || !fromVia) return null
   return [...toVia, ...fromVia.slice(1)]
 }

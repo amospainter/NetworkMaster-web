@@ -22,15 +22,18 @@ to survive and score as long as possible against ever-increasing traffic.
 - **Select** a device or cable — tap/click it. Its inspector opens on the
   right with live stats and available actions.
 - **Build** — pick equipment from the BUILD panel on the left (Switch,
-  Router, Wireless, Firewall, Server) to arm it, then click anywhere on the
-  canvas to stamp it down there and pay its cost from your budget. The tool
+  Router, Wireless, Firewall, Server, Load Balancer) to arm it, then click
+  anywhere on the canvas to stamp it down there and pay its cost from your
+  budget. The tool
   stays armed for placing several at once; click its button again or press
   **Esc** to put it away. New equipment drops in unconnected; drag it to
   reposition afterward.
 - **Connect devices** — select a device, choose **Begin cable**, then tap the
   destination device. Before confirming, you can toggle the cable's **Style**
-  between _Right-angle_ (auto-routed around other equipment) and _Diagonal_
-  (a direct line, useful when the auto-router gets crowded).
+  between _Diagonal_ (a direct line; the default, since it keeps cable labels
+  spread out and readable) and _Right-angle_ (auto-routed around other
+  equipment, useful when several cables run parallel and you want them to
+  read as a tidy bundle instead of crossing lines).
 - **Reroute a cable** — select an existing cable, then **Reroute start** or
   **Reroute end**, then tap the new device. Tier, VLAN, style, and upgrade
   spend are preserved; only the endpoint moves.
@@ -71,14 +74,15 @@ to survive and score as long as possible against ever-increasing traffic.
 
 ### Infrastructure devices
 
-| Device        | Cost | Wired ports | Base throughput (pkt/tick)    | Notes                                |
-| ------------- | ---- | ----------- | ----------------------------- | ------------------------------------ |
-| Switch        | $80  | 4           | 8                             | +2 ports / +4 pkt-tick upgrades      |
-| Router        | $140 | 8           | 20                            | Only device that may reach the Cloud |
-| Wireless (AP) | $90  | 1           | 4 (base, by Wi-Fi generation) | Single uplink port; see §4           |
-| Firewall      | $110 | 4           | 12                            | Can block one device kind's traffic  |
-| Server        | $120 | 2           | Unlimited                     | A cross-subnet traffic destination   |
-| Cloud Edge    | —    | 2           | Unlimited                     | Fixed, present from the start        |
+| Device        | Cost | Wired ports | Base throughput (pkt/tick)    | Notes                                                                |
+| ------------- | ---- | ----------- | ----------------------------- | -------------------------------------------------------------------- |
+| Switch        | $80  | 4           | 8                             | +2 ports / +4 pkt-tick upgrades                                      |
+| Router        | $140 | 8           | 20                            | Only device that may reach the Cloud                                 |
+| Wireless (AP) | $90  | 1           | 4 (base, by Wi-Fi generation) | Single uplink port; see §4                                           |
+| Firewall      | $110 | 4           | 12                            | Can block one device kind's traffic                                  |
+| Server        | $120 | 2           | Unlimited                     | A cross-subnet traffic destination                                   |
+| Load Balancer | $150 | 4           | 24                            | Highest base throughput; +10 pkt-tick upgrade only (no port upgrade) |
+| Cloud Edge    | —    | 2           | Unlimited                     | Fixed, present from the start                                        |
 
 - **Only the router may connect to the Cloud Edge.** Every packet's final
   destination is the cloud (or, for cross-subnet traffic, another device —
@@ -89,13 +93,19 @@ to survive and score as long as possible against ever-increasing traffic.
   same pair of devices.
 - **Port limits are enforced** on both ends of a link; a device with no free
   ports refuses a new cable.
-- Every forwarding device (router, switch, wireless, firewall) admits only as
-  many packets per tick as its current throughput allows, and does so in
+- Every forwarding device (router, switch, wireless, firewall, load balancer)
+  admits only as many packets per tick as its current throughput allows, and does so in
   **strict priority order**: realtime traffic (phones, consoles) is served
   first, then stream (TVs, tablets), then bulk (PCs, routers/switches'
   onward hops). Packets that don't fit wait in a real queue at that device
   for up to 6 ticks before being dropped — you can see this queue depth live
   in that device's inspector.
+- **Load balancers actually balance.** If a load balancer has two or more
+  equally-short paths onward to a packet's destination — for example two
+  separate routers, each with their own cable to the Cloud Edge — outbound
+  traffic spreads across those paths over time instead of every packet
+  taking the same one. A shorter path is still always preferred; balancing
+  only kicks in between paths of equal length.
 - **Equipment wear and failure** (equipment-failure scenarios only, §8):
   overloaded devices accrue wear. Past 20 wear, health starts dropping;
   health hitting 0 takes the device offline. An offline device blinks
@@ -271,18 +281,40 @@ ticks ÷ 30) × 100%`. At game over you can **Try again**, or **Continue
 unscored** — the run keeps going (failure pressure resets) but stops paying
 into the leaderboard and no further game-over check occurs.
 
-### The eight scenarios
+### The twelve scenarios
+
+Listed easiest to hardest (the menu is ordered the same way):
 
 | Scenario       | Difficulty | Budget | Equipment failure | Gist                                                |
 | -------------- | :--------: | -----: | :---------------: | --------------------------------------------------- |
 | Home Network   |   ★☆☆☆☆    |   $100 |        No         | Small household; learn the basics.                  |
+| Café Hotspot   |   ★★☆☆☆    |   $130 |        No         | A counter plus a phone crowd on one hotspot.        |
 | Startup Office |   ★★☆☆☆    |   $140 |        No         | Two teams share infrastructure.                     |
+| School Lab     |   ★★★☆☆    |   $190 |        No         | A wired lab across three classrooms and a server.   |
 | Corporate HQ   |   ★★★☆☆    |   $180 |        Yes        | Three subnets, a firewall, aging gear.              |
 | Metro Campus   |   ★★★☆☆    |   $200 |        Yes        | Distributed switches, long paths reward redundancy. |
 | Branch Network |   ★★★★☆    |   $120 |        Yes        | Tight budget; every port counts.                    |
-| ISP Hub        |   ★★★★☆    |   $220 |        Yes        | High-volume routing backbone.                       |
 | Arena Night    |   ★★★★☆    |   $240 |        Yes        | Wireless crowd floods access points.                |
+| ISP Hub        |   ★★★★☆    |   $220 |        Yes        | High-volume routing backbone.                       |
+| Data Center    |   ★★★★★    |   $260 |        Yes        | Heavy server-to-server east-west traffic.           |
 | Edge Exchange  |   ★★★★★    |   $260 |        Yes        | Realtime services compete with bulk at the edge.    |
+| Smart City     |   ★★★★★    |   $280 |        Yes        | Wired + wireless + firewall + core, fastest ramp.   |
+
+Corporate HQ, Metro Campus, ISP Hub, Data Center, and Smart City start with a
+**dual-router core**: a second router with its own Cloud Edge uplink, bridged
+to both subnet switches through a load balancer. Outbound traffic naturally
+splits across both routers (see the load balancer note in §3) — losing one
+uplink to equipment failure doesn't take the whole network down with it. Data
+Center adds a second server on a different subnet for heavier east-west
+traffic, and Smart City layers a wireless crowd on top of the wired core.
+Every non-Home scenario starts with one unconnected end device per subnet
+(Desk-A1, Display-B) — wiring them in (and building more as your budget and
+the run's own device spawns allow) is on you.
+
+Starting a run always opens with a short **briefing** for that scenario:
+its objective and a few concrete first steps for its actual starting
+layout. It reappears every time you start a new run of that scenario, not
+just the first — it's scenario context, not a one-time tutorial.
 
 ## 10. Reading the HUD and inspectors
 

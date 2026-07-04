@@ -11,6 +11,7 @@ export type DeviceKind =
   | 'server'
   | 'firewall'
   | 'wireless'
+  | 'loadBalancer'
 
 /**
  * Persisted cable upgrade identifiers, ordered separately by `CABLE_TIERS`.
@@ -176,4 +177,8 @@ export type Scenario = {
   warmupFloor: number
   /** Tick at which traffic eases up to 100% of the base rate. */
   warmupTicks: number
+  /** One or two sentences framing this scenario's premise and goal, shown in the start-of-run briefing. */
+  objective: string
+  /** Concrete first actions for this scenario's actual starting topology, shown in the start-of-run briefing. */
+  firstSteps: string[]
 }

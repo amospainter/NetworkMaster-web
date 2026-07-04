@@ -52,6 +52,35 @@ const wirelessClientLoad = (state: GameState, hub: Device) =>
   ).length
 
 /**
+ * Precomputes every wireless-capable device's serving access point in a
+ * single pass, so a simulation tick that resolves routes for many packets
+ * (or the redundancy check for many deliveries) can reuse one result instead
+ * of re-deriving each hub's client load — and re-sorting hubs — per call.
+ * Cable topology does not affect wireless association, so the same map
+ * remains valid for any cable-edge-filtered clone of the same devices.
+ *
+ * @param state - Current game state.
+ * @returns A map from wireless-capable client id to its serving access point id.
+ */
+export function buildWirelessAssociations(state: GameState): Map<string, string> {
+  const hubs = state.devices.filter((device) => device.kind === 'wireless' && !device.offline)
+  const loadByHubId = new Map(hubs.map((hub) => [hub.id, wirelessClientLoad(state, hub)]))
+  const associations = new Map<string, string>()
+  for (const client of state.devices) {
+    if (!WIRELESS_CAPABLE_KINDS.includes(client.kind)) continue
+    const inRange = hubs.filter((hub) => distanceBetween(hub, client) <= hubRange(hub))
+    if (!inRange.length) continue
+    const bestHub = inRange.sort((firstHub, secondHub) => {
+      const loadDelta = loadByHubId.get(firstHub.id)! - loadByHubId.get(secondHub.id)!
+      if (loadDelta !== 0) return loadDelta
+      return distanceBetween(firstHub, client) - distanceBetween(secondHub, client)
+    })[0]
+    associations.set(client.id, bestHub.id)
+  }
+  return associations
+}
+
+/**
  * Returns the operational access point covering a wireless-capable client,
  * preferring the least-loaded hub among those in range so clients spread out
  * across access points instead of piling onto a single one; nearest distance
@@ -61,19 +90,22 @@ const wirelessClientLoad = (state: GameState, hub: Device) =>
  * @param wirelessDevice - Client seeking an access point.
  * @returns The preferred operational access point, or `undefined` when none is in range.
  */
-export const findWirelessHub = (state: GameState, wirelessDevice: Device) =>
-  state.devices
-    .filter(
-      (candidate) =>
-        candidate.kind === 'wireless' &&
-        !candidate.offline &&
-        distanceBetween(candidate, wirelessDevice) <= hubRange(candidate),
-    )
-    .sort((firstHub, secondHub) => {
-      const loadDelta = wirelessClientLoad(state, firstHub) - wirelessClientLoad(state, secondHub)
-      if (loadDelta !== 0) return loadDelta
-      return distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice)
-    })[0]
+export const findWirelessHub = (state: GameState, wirelessDevice: Device) => {
+  const candidates = state.devices.filter(
+    (candidate) =>
+      candidate.kind === 'wireless' &&
+      !candidate.offline &&
+      distanceBetween(candidate, wirelessDevice) <= hubRange(candidate),
+  )
+  // Precompute each candidate's load once rather than inside the sort
+  // comparator, which would otherwise re-scan every device O(n log n) times.
+  const loadByHubId = new Map(candidates.map((hub) => [hub.id, wirelessClientLoad(state, hub)]))
+  return candidates.sort((firstHub, secondHub) => {
+    const loadDelta = loadByHubId.get(firstHub.id)! - loadByHubId.get(secondHub.id)!
+    if (loadDelta !== 0) return loadDelta
+    return distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice)
+  })[0]
+}
 
 /**
  * Returns the access point currently serving a wireless-capable device.
