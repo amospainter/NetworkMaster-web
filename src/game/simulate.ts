@@ -49,18 +49,20 @@ function trafficSpikeMultiplier(state: GameState, deviceId: string): number {
 /**
  * Creates an in-flight packet at the beginning of a resolved route.
  *
- * @param source - Device generating the packet.
+ * @param source - Actual endpoint at the beginning of the route.
  * @param path - Precomputed device-id route.
  * @param tick - Generation tick used for latency accounting.
+ * @param owner - Client whose demand created the request/response traffic.
  * @returns A new packet positioned at the start of its route.
  */
-function packet(source: Device, path: string[], tick: number): Packet {
+function packet(source: Device, path: string[], tick: number, owner: Device = source): Packet {
   return {
     id: createId(),
     path,
     hop: 0,
     progress: 0,
-    priority: DEVICE_RULES[source.kind].priority,
+    priority: DEVICE_RULES[owner.kind].priority,
+    owner: owner.id,
     source: source.id,
     generatedTick: tick,
     queuedTicks: 0,
@@ -337,15 +339,18 @@ export function simulate(state: GameState): GameState {
   const wirelessAssociations = buildWirelessAssociations(nextState)
   const redundancyMemo = new Map<string, number>()
   for (const deliveredPacket of deliveredPackets) {
-    const sourceDevice = nextState.devices.find((device) => device.id === deliveredPacket.source)
-    if (sourceDevice) sourceDevice.delivered++
+    const ownerDevice = nextState.devices.find(
+      (device) => device.id === (deliveredPacket.owner ?? deliveredPacket.source),
+    )
+    if (ownerDevice) ownerDevice.delivered++
+    const routeSourceId = deliveredPacket.path[0]
     const destinationId = deliveredPacket.path[deliveredPacket.path.length - 1]
-    const redundancyKey = `${deliveredPacket.source}|${destinationId}`
+    const redundancyKey = `${routeSourceId}|${destinationId}`
     let pathCount = redundancyMemo.get(redundancyKey)
     if (pathCount === undefined) {
       pathCount = independentPathCount(
         nextState,
-        deliveredPacket.source,
+        routeSourceId,
         destinationId,
         wirelessAssociations,
       )
@@ -389,7 +394,9 @@ export function simulate(state: GameState): GameState {
       Math.floor(requestedTraffic) + (Math.random() < requestedTraffic % 1 ? 1 : 0)
     for (let attempt = 0; attempt < packetAttempts; attempt++) {
       if (Math.random() > 0.24) continue
-      sourceDevice.generated++
+      // Each demand unit is a two-way exchange: the initiating request and
+      // its response both consume real network capacity.
+      sourceDevice.generated += 2
       let route = findRoute(nextState, sourceDevice.id, cloud.id, wirelessAssociations)
       // 30% of traffic in multi-subnet scenarios targets another device on the
       // network (e.g. desk-to-server) instead of the cloud, routed via the router.
@@ -406,8 +413,13 @@ export function simulate(state: GameState): GameState {
           if (crossRoute) route = crossRoute
         }
       }
-      if (route) nextState.packets.push(packet(sourceDevice, route, nextState.tick))
-      else packetsDroppedThisTick++
+      if (route) {
+        const destination = nextState.devices.find((device) => device.id === route.at(-1))!
+        nextState.packets.push(
+          packet(sourceDevice, route, nextState.tick),
+          packet(destination, [...route].reverse(), nextState.tick, sourceDevice),
+        )
+      } else packetsDroppedThisTick += 2
     }
   }
 

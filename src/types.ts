@@ -103,6 +103,9 @@ export type Packet = {
   /** Normalized progress along the cable from `path[hop]` to the next device. */
   progress: number
   priority: Priority
+  /** Device whose demand created this traffic, even when a response travels back from its peer. */
+  owner?: string
+  /** Actual endpoint at the beginning of `path`. */
   source: string
   generatedTick: number
   /** Ticks this packet has spent waiting in a forwarding device's queue. */

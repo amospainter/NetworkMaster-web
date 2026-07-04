@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { computeCableRoutes } from './cableGeometry'
 import {
   addCable,
@@ -486,6 +486,28 @@ describe('NetworkMaster gameplay rules', () => {
     game = simulate(game)
     expect(game.recentLatencyTicks).toBeGreaterThan(0)
     expect(game.recentQueueDelayTicks).toBe(3)
+  })
+
+  it('generates outbound requests and inbound responses for client traffic', () => {
+    let game = newGame('home')
+    const pc = game.devices.find((device) => device.kind === 'pc')!
+    const router = game.devices.find((device) => device.kind === 'router')!
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    game = addCable(game, pc.id, router.id)
+
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    try {
+      game = simulate(game)
+    } finally {
+      random.mockRestore()
+    }
+
+    expect(
+      game.packets.some((packet) => packet.path.at(0) === pc.id && packet.path.at(-1) === cloud.id),
+    ).toBe(true)
+    expect(
+      game.packets.some((packet) => packet.path.at(0) === cloud.id && packet.path.at(-1) === pc.id),
+    ).toBe(true)
   })
 
   it('awards a delivery milestone exactly once', () => {
