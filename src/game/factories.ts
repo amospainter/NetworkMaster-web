@@ -33,7 +33,7 @@ export const createDevice = (
   subnet,
   wifiLevel: kind === 'wireless' ? 0 : -1,
   upgradeSpend: 0,
-  firewallRule: null,
+  firewallRules: [],
   generated: 0,
   delivered: 0,
   interference: 0,

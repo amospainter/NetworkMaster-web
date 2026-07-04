@@ -6,7 +6,6 @@ import {
   buildDevice,
   buildWirelessAssociations,
   cycleCableVlan,
-  cycleFirewallRule,
   findRoute,
   independentPathCount,
   migrateSavedGame,
@@ -18,6 +17,7 @@ import {
   SCENARIOS,
   servingWirelessHub,
   simulate,
+  toggleFirewallRule,
   upgradeAllCables,
   upgradeCable,
   upgradeDeviceSpeed,
@@ -29,7 +29,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(8)
+      expect(game.version).toBe(9)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -354,9 +354,9 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.events[0].text).toContain('$117 salvage')
   })
 
-  it('initializes the version 8 schema with empty progression state', () => {
+  it('initializes the version 9 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(8)
+    expect(game.version).toBe(9)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
     expect(game.devices.every((device) => device.interference === 0)).toBe(true)
@@ -381,7 +381,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
@@ -396,7 +396,7 @@ describe('NetworkMaster gameplay rules', () => {
     } & Partial<Omit<GameState, 'version' | 'devices'>>
     v3.devices.forEach((device) => delete device.interference)
     const migrated = migrateSavedGame(v3 as unknown as { version: number })
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
   })
 
@@ -407,7 +407,7 @@ describe('NetworkMaster gameplay rules', () => {
       packets: [{ id: 'p1' }],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v4)
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.packets).toEqual([])
   })
 
@@ -422,7 +422,7 @@ describe('NetworkMaster gameplay rules', () => {
       }),
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v5)
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
   })
 
@@ -433,7 +433,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v6.recentLatencyTicks
     delete v6.recentQueueDelayTicks
     const migrated = migrateSavedGame(v6 as unknown as { version: number })
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.recentLatencyTicks).toBe(0)
     expect(migrated?.recentQueueDelayTicks).toBe(0)
   })
@@ -446,7 +446,7 @@ describe('NetworkMaster gameplay rules', () => {
       events: ['Run initialized. Connect clients to bring them online.'],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v7)
-    expect(migrated?.version).toBe(8)
+    expect(migrated?.version).toBe(9)
     expect(migrated?.events).toEqual([
       { tick: 42, text: 'Run initialized. Connect clients to bring them online.' },
     ])
@@ -705,8 +705,48 @@ describe('NetworkMaster gameplay rules', () => {
     game = addCable(game, firewall.id, router.id)
     expect(findRoute(game, pc.id, cloud.id)).not.toBeNull()
 
-    game = cycleFirewallRule(game, firewall.id) // block PC traffic
+    game = toggleFirewallRule(game, firewall.id, 'pc')
     expect(findRoute(game, pc.id, cloud.id)).toBeNull()
+
+    game = toggleFirewallRule(game, firewall.id, 'phone')
+    expect(game.devices.find((device) => device.id === firewall.id)?.firewallRules).toEqual([
+      'pc',
+      'phone',
+    ])
+  })
+
+  it('keeps a rejected packet at the firewall for one drop-animation interval', () => {
+    let game = newGame('home')
+    game.budget = 500
+    game = buildDevice(game, 'firewall')
+    const pc = game.devices.find((device) => device.kind === 'pc')!
+    const firewall = game.devices.find((device) => device.kind === 'firewall')!
+    const router = game.devices.find((device) => device.kind === 'router')!
+    const cloud = game.devices.find((device) => device.kind === 'cloud')!
+    game = toggleFirewallRule(game, firewall.id, 'pc')
+    game.packets = [
+      {
+        id: 'blocked-at-firewall',
+        path: [pc.id, firewall.id, router.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        owner: pc.id,
+        source: pc.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+      },
+    ]
+
+    const droppedBefore = game.dropped
+    game = simulate(game)
+    const droppingPacket = game.packets.find((packet) => packet.id === 'blocked-at-firewall')
+    expect(droppingPacket?.droppingAtFirewall).toBe(true)
+    expect(droppingPacket?.hop).toBe(1)
+    expect(game.dropped).toBe(droppedBefore + 1)
+
+    game = simulate(game)
+    expect(game.packets.some((packet) => packet.id === 'blocked-at-firewall')).toBe(false)
   })
 
   it('builds a load balancer as a 4-port forwarding node that bridges end devices', () => {

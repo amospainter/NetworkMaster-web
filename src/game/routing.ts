@@ -16,6 +16,8 @@ import { buildWirelessAssociations } from './wireless'
  * @param wirelessAssociations - Precomputed client-to-hub map for this state;
  *   built internally when omitted. Callers resolving many routes against the
  *   same state (a simulation tick) should build this once and share it.
+ * @param ignoreFirewallRules - Include blocked firewall edges, used only to
+ *   visualize traffic reaching the firewall that rejects it.
  * @returns The shortest device-id path, or `null` when no route exists.
  */
 export function findRoute(
@@ -23,6 +25,7 @@ export function findRoute(
   sourceId: string,
   destinationId: string,
   wirelessAssociations?: Map<string, string>,
+  ignoreFirewallRules = false,
 ): string[] | null {
   const source = state.devices.find((device) => device.id === sourceId)
   if (!source) return null
@@ -44,9 +47,13 @@ export function findRoute(
       const secondDevice = state.devices.find((device) => device.id === networkCable.to)
       const vlanAllowsTraffic = networkCable.vlan === null || networkCable.vlan === source.subnet
       const firstDeviceAllowsTraffic =
-        firstDevice?.kind !== 'firewall' || firstDevice.firewallRule !== source.kind
+        ignoreFirewallRules ||
+        firstDevice?.kind !== 'firewall' ||
+        !firstDevice.firewallRules.includes(source.kind)
       const secondDeviceAllowsTraffic =
-        secondDevice?.kind !== 'firewall' || secondDevice.firewallRule !== source.kind
+        ignoreFirewallRules ||
+        secondDevice?.kind !== 'firewall' ||
+        !secondDevice.firewallRules.includes(source.kind)
       if (
         firstDevice &&
         !firstDevice.offline &&

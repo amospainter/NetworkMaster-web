@@ -276,6 +276,9 @@ export function simulate(state: GameState): GameState {
   const arrivingByDevice = new Map<string, Packet[]>()
   const steadyPackets: Packet[] = []
   for (const activePacket of nextState.packets) {
+    // A rejected packet remains for one simulation interval so PacketLayer can
+    // play the burst/fade animation at the firewall, then disappears.
+    if (activePacket.droppingAtFirewall) continue
     if (activePacket.progress + 0.5 < 1) {
       activePacket.progress += 0.5
       steadyPackets.push(activePacket)
@@ -289,14 +292,33 @@ export function simulate(state: GameState): GameState {
 
   const admittedPackets: Packet[] = []
   const requeuedPackets: Packet[] = []
+  const firewallDropPackets: Packet[] = []
   for (const [arrivingDeviceId, arrivals] of arrivingByDevice) {
+    let eligibleArrivals = arrivals
     const arrivingDevice = nextState.devices.find((device) => device.id === arrivingDeviceId)
+    if (arrivingDevice?.kind === 'firewall') {
+      const allowedArrivals: Packet[] = []
+      for (const arrivingPacket of arrivals) {
+        const owner = nextState.devices.find(
+          (device) => device.id === (arrivingPacket.owner ?? arrivingPacket.source),
+        )
+        if (owner && arrivingDevice.firewallRules.includes(owner.kind)) {
+          arrivingPacket.progress = 0
+          arrivingPacket.hop++
+          arrivingPacket.droppingAtFirewall = true
+          firewallDropPackets.push(arrivingPacket)
+          packetsDroppedThisTick++
+        } else allowedArrivals.push(arrivingPacket)
+      }
+      eligibleArrivals = allowedArrivals
+      if (eligibleArrivals.length === 0) continue
+    }
     if (!arrivingDevice || !FORWARDING_KINDS.includes(arrivingDevice.kind)) {
-      admittedPackets.push(...arrivals)
+      admittedPackets.push(...eligibleArrivals)
       continue
     }
     const capacity = deviceCapacity(arrivingDevice)
-    const ordered = [...arrivals].sort(
+    const ordered = [...eligibleArrivals].sort(
       (a, b) => PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority],
     )
     admittedPackets.push(...ordered.slice(0, capacity))
@@ -321,7 +343,12 @@ export function simulate(state: GameState): GameState {
   }
   // Requeued packets keep their pre-arrival progress so they retry admission
   // next tick instead of restarting their cable traversal from the source.
-  nextState.packets = [...steadyPackets, ...admittedPackets, ...requeuedPackets]
+  nextState.packets = [
+    ...steadyPackets,
+    ...admittedPackets,
+    ...requeuedPackets,
+    ...firewallDropPackets,
+  ]
 
   const deliveredPackets = nextState.packets.filter(
     (activePacket) => activePacket.hop >= activePacket.path.length - 1,
@@ -419,7 +446,24 @@ export function simulate(state: GameState): GameState {
           packet(sourceDevice, route, nextState.tick),
           packet(destination, [...route].reverse(), nextState.tick, sourceDevice),
         )
-      } else packetsDroppedThisTick += 2
+      } else {
+        // If firewall policy is the only thing preventing a route, create the
+        // exchange on that physical path. It will visibly terminate when it
+        // reaches the blocking firewall instead of disappearing at the source.
+        const blockedRoute = findRoute(
+          nextState,
+          sourceDevice.id,
+          cloud.id,
+          wirelessAssociations,
+          true,
+        )
+        if (blockedRoute) {
+          nextState.packets.push(
+            packet(sourceDevice, blockedRoute, nextState.tick),
+            packet(cloud, [...blockedRoute].reverse(), nextState.tick, sourceDevice),
+          )
+        } else packetsDroppedThisTick += 2
+      }
     }
   }
 

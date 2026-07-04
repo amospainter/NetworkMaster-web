@@ -152,6 +152,37 @@
   background: var(--grid);
 }
 
+.firewall-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+}
+
+.firewall-rules legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font: 700 10px var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.firewall-rules label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.firewall-rules input {
+  accent-color: var(--red);
+}
+
 .upgrade-list {
   display: grid;
   gap: 10px;
@@ -213,6 +244,13 @@
   flex-wrap: wrap;
   gap: 6px;
   margin: 18px 0 4px;
+}
+
+.full-howto-link {
+  display: inline-flex;
+  margin-top: 2px;
+  color: var(--titlebar);
+  font: 700 11px var(--font-ui);
 }
 
 .help-tabs button {

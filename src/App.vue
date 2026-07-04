@@ -30,7 +30,6 @@ import {
   buildDevice,
   CABLE_TIERS,
   cycleCableVlan,
-  cycleFirewallRule,
   deleteCable,
   deviceCapacity,
   deviceRemovalRefund,
@@ -49,6 +48,7 @@ import {
   servingWirelessHub,
   siteCableUpgradeFullCost,
   siteCableUpgradeTargets,
+  toggleFirewallRule,
   upgradeAllCables,
   upgradeAllPorts,
   upgradeAllSwitchSpeed,
@@ -63,6 +63,13 @@ import type { Cable, CableTier, Device, DeviceKind, GameState } from './types'
 
 const ACTIVE_RUN_STORAGE_KEY = 'networkmaster.active-run.v1'
 const HIGH_SCORE_STORAGE_KEY = 'networkmaster.best.v1'
+const FIREWALL_BLOCK_TYPES: { kind: DeviceKind; label: string }[] = [
+  { kind: 'pc', label: 'PCs' },
+  { kind: 'tv', label: 'TVs' },
+  { kind: 'console', label: 'Consoles' },
+  { kind: 'phone', label: 'Phones' },
+  { kind: 'tablet', label: 'Tablets' },
+]
 
 /** Friendly speed labels for the site cable-upgrade picker, keyed by cable tier. */
 const TIER_SPEED_LABEL: Record<CableTier, string> = {
@@ -1101,9 +1108,17 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 >
               </div>
               <div v-if="picked.kind === 'firewall'" class="device-upgrades">
-                <button @click="setGame(cycleFirewallRule(game!, picked!.id))">
-                  Block rule <b>{{ picked.firewallRule ?? 'None' }}</b>
-                </button>
+                <fieldset class="firewall-rules">
+                  <legend>Block traffic from</legend>
+                  <label v-for="option in FIREWALL_BLOCK_TYPES" :key="option.kind">
+                    <input
+                      type="checkbox"
+                      :checked="picked.firewallRules.includes(option.kind)"
+                      @change="setGame(toggleFirewallRule(game!, picked!.id, option.kind))"
+                    />
+                    {{ option.label }}
+                  </label>
+                </fieldset>
               </div>
               <div v-if="['router', 'switch'].includes(picked.kind)" class="device-upgrades">
                 <button
@@ -1301,6 +1316,9 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
           <template v-if="modal === 'help'"
             ><p class="overline">HOW TO PLAY</p>
             <h1>Route every packet.</h1>
+            <a class="full-howto-link" href="/howtoplay.html" target="_blank" rel="noopener">
+              Full HOWTO Play guide ↗
+            </a>
             <div class="help-tabs">
               <button
                 v-for="section in HELP_SECTIONS"

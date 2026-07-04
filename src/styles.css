@@ -849,6 +849,45 @@ nav > div {
 .packet.stream {
   background: #60d7ff;
 }
+.packet.firewall-drop {
+  z-index: 5;
+  background: #ff3b30;
+  border-color: #fff2ef;
+  box-shadow: 0 0 5px #ff3b30;
+  animation: firewall-drop 0.75s ease-out both;
+}
+.packet.firewall-drop::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid #ff6b5f;
+  border-radius: 50%;
+  animation: firewall-drop-ring 0.75s ease-out both;
+}
+@keyframes firewall-drop {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  45% {
+    background: #ffcc00;
+    transform: translate(-50%, -50%) scale(1.8);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 12px) scale(0.25);
+  }
+}
+@keyframes firewall-drop-ring {
+  from {
+    opacity: 1;
+    transform: scale(0.25);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.8);
+  }
+}
 .build-panel,
 .inspector,
 .events,
@@ -867,6 +906,7 @@ nav > div {
   top: 14px;
   width: 145px;
   padding: 10px;
+  overflow: visible;
 }
 .panel-title {
   font: bold 10px var(--font-ui);
@@ -908,6 +948,37 @@ nav > div {
 }
 .build-panel svg {
   width: 17px;
+}
+.build-tooltip {
+  position: relative;
+}
+.build-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  width: 220px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--canvas-ink);
+  box-shadow: var(--shadow-window);
+  font: 600 10px var(--font-ui);
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(3px, -50%);
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
+  white-space: normal;
+  z-index: 10;
+}
+.build-tooltip:hover::after,
+.build-tooltip:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, -50%);
 }
 .inspector {
   right: 14px;
@@ -1533,6 +1604,9 @@ footer i {
     border-radius: var(--radius) var(--radius) 0 0;
     z-index: 6;
     scrollbar-width: none;
+  }
+  .build-tooltip::after {
+    display: none;
   }
   .build-panel::-webkit-scrollbar {
     display: none;

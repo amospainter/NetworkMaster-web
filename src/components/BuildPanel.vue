@@ -17,10 +17,13 @@ const emit = defineEmits<{
   <aside class="build-panel">
     <div class="panel-title"><Plus /> BUILD</div>
     <button
-      v-for="[kind, label, cost] in BUILD_OPTIONS"
+      v-for="[kind, label, cost, description] in BUILD_OPTIONS"
       :key="kind"
       :disabled="budget < cost"
+      class="build-tooltip"
       :class="{ active: activeKind === kind }"
+      :data-tooltip="description"
+      :aria-label="`${label}, $${cost}. ${description}`"
       @click="emit('select', kind)"
     >
       <component :is="deviceIcons[kind]" /><span

@@ -30,12 +30,42 @@ export const deviceIcons = {
   loadBalancer: Scale,
 }
 
-/** Buildable equipment kinds, their button label, and their base cost. */
-export const BUILD_OPTIONS: [DeviceKind, string, number][] = [
-  ['switch', 'Switch', 80],
-  ['router', 'Router', 140],
-  ['wireless', 'Wireless', 90],
-  ['firewall', 'Firewall', 110],
-  ['server', 'Server', 120],
-  ['loadBalancer', 'Load Balancer', 150],
+/** Buildable equipment kinds, their button label, base cost, and gameplay purpose. */
+export const BUILD_OPTIONS: [DeviceKind, string, number, string][] = [
+  [
+    'switch',
+    'Switch',
+    80,
+    'Connects wired devices on the same network. Use it to add ports and expand your local network.',
+  ],
+  [
+    'router',
+    'Router',
+    140,
+    'Routes traffic between networks. Use it to connect network segments and create alternate paths.',
+  ],
+  [
+    'wireless',
+    'Wireless',
+    90,
+    'Provides Wi-Fi access for wireless devices. Use it to connect phones, tablets, and other mobile clients.',
+  ],
+  [
+    'firewall',
+    'Firewall',
+    110,
+    'Filters malicious network traffic. Use it to protect devices and reduce security threats.',
+  ],
+  [
+    'server',
+    'Server',
+    120,
+    'Provides services to network clients. Use it to handle demand and generate revenue.',
+  ],
+  [
+    'loadBalancer',
+    'Load Balancer',
+    150,
+    'Distributes traffic across available paths. Use it to prevent overload and improve reliability.',
+  ],
 ]

@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "docs": "node scripts/generate-howtoplay.mjs",
+    "predev": "npm run docs",
     "dev": "vite --host 0.0.0.0",
+    "prebuild": "npm run docs",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",

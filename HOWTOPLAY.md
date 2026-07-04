@@ -79,7 +79,7 @@ to survive and score as long as possible against ever-increasing traffic.
 | Switch        | $80  | 4           | 8                             | +2 ports / +4 pkt-tick upgrades                                      |
 | Router        | $140 | 8           | 20                            | Only device that may reach the Cloud                                 |
 | Wireless (AP) | $90  | 1           | 4 (base, by Wi-Fi generation) | Single uplink port; see §4                                           |
-| Firewall      | $110 | 4           | 12                            | Can block one device kind's traffic                                  |
+| Firewall      | $110 | 4           | 12                            | Can block multiple selected device kinds                             |
 | Server        | $120 | 2           | Unlimited                     | A cross-subnet traffic destination                                   |
 | Load Balancer | $150 | 4           | 24                            | Highest base throughput; +10 pkt-tick upgrade only (no port upgrade) |
 | Cloud Edge    | —    | 2           | Unlimited                     | Fixed, present from the start                                        |
@@ -157,9 +157,10 @@ to survive and score as long as possible against ever-increasing traffic.
   matches the VLAN — anything else is blocked from crossing that link. This
   lets you segment traffic (e.g. isolate guest devices) at the cost of extra
   planning.
-- **Firewall block rules**: a firewall can be set to block PC, TV, or Console
-  traffic specifically (cycle through none → PC → TV → Console → none). A
-  blocked device's traffic simply can't route across that firewall.
+- **Firewall block rules**: a firewall can independently block traffic from
+  PCs, TVs, consoles, phones, and tablets. Select any combination in the
+  firewall inspector. Rejected packets travel to the firewall, flash red, and
+  visibly drop there; if another valid route avoids that firewall, routing uses it.
 - **Cross-subnet traffic**: in every scenario except Home Network, about 30%
   of generated traffic targets another device on a different subnet (routed
   via the router) instead of the cloud — usually a server. This models

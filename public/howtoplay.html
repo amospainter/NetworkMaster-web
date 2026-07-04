@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Complete NetworkMaster gameplay guide" />
+    <title>How to Play NetworkMaster</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #10151c; color: #e7edf5; }
+      body { margin: 0; }
+      main { width: min(920px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80px; line-height: 1.65; }
+      h1, h2, h3 { line-height: 1.18; color: #f7fbff; scroll-margin-top: 20px; }
+      h1 { font-size: clamp(2rem, 7vw, 3.5rem); margin: 0 0 24px; color: #d9ff68; }
+      h2 { margin-top: 48px; padding-bottom: 8px; border-bottom: 1px solid #344150; }
+      h3 { margin-top: 30px; }
+      p, li { color: #c7d1dd; }
+      li + li { margin-top: 8px; }
+      a { color: #72dfff; }
+      code { padding: 2px 5px; border-radius: 4px; background: #202a35; color: #f1ffbd; }
+      .table-wrap { overflow-x: auto; margin: 20px 0; border: 1px solid #344150; border-radius: 8px; }
+      table { width: 100%; border-collapse: collapse; min-width: 600px; }
+      th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #293441; }
+      th { background: #202a35; color: #d9ff68; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+      tr:last-child td { border-bottom: 0; }
+      .back { display: inline-block; margin-bottom: 28px; font-weight: 700; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="/">← Back to NetworkMaster</a>
+      <h1 id="how-to-play-networkmaster">How to Play NetworkMaster</h1>
+<p>NetworkMaster is an endless network-building survival game. Design a topology, keep packets flowing, and hold off rising traffic and equipment failure for as long as you can. Everything runs in your browser — there's no account and no server; your run and personal best are saved to local storage only.</p>
+<p>This guide covers every rule the simulation actually enforces, not just the basics. If a number here ever looks wrong, <code>src/game.ts</code> is the source of truth — this document is generated from it.</p>
+<h2 id="1-the-objective">1. The objective</h2>
+<p>Every tick, your <strong>source devices</strong> (PCs, TVs, consoles, phones, tablets) generate packets that need a path to the <strong>Cloud Edge</strong>. Deliver packets to score points. If your network drops too many packets in too short a window, it fails and the run ends. The game has no fixed win condition — the goal is to survive and score as long as possible against ever-increasing traffic.</p>
+<h2 id="2-controls">2. Controls</h2>
+<ul>
+<li><strong>Select</strong> a device or cable — tap/click it. Its inspector opens on the</li>
+<p>right with live stats and available actions.</p>
+<li><strong>Build</strong> — pick equipment from the BUILD panel on the left (Switch,</li>
+<p>Router, Wireless, Firewall, Server, Load Balancer) to arm it, then click anywhere on the canvas to stamp it down there and pay its cost from your budget. The tool stays armed for placing several at once; click its button again or press <strong>Esc</strong> to put it away. New equipment drops in unconnected; drag it to reposition afterward.</p>
+<li><strong>Connect devices</strong> — select a device, choose <strong>Begin cable</strong>, then tap the</li>
+<p>destination device. Before confirming, you can toggle the cable's <strong>Style</strong> between <em>Diagonal</em> (a direct line; the default, since it keeps cable labels spread out and readable) and <em>Right-angle</em> (auto-routed around other equipment, useful when several cables run parallel and you want them to read as a tidy bundle instead of crossing lines).</p>
+<li><strong>Reroute a cable</strong> — select an existing cable, then <strong>Reroute start</strong> or</li>
+<p><strong>Reroute end</strong>, then tap the new device. Tier, VLAN, style, and upgrade spend are preserved; only the endpoint moves.</p>
+<li><strong>Drag</strong> any device to reposition it — this can move a wireless client in</li>
+<p>or out of an access point's coverage circle, or shift a hub's zone over new devices.</p>
+<li><strong>Delete</strong> a cable, or <strong>Remove equipment</strong>, from its inspector. You get a</li>
+<p>90% salvage refund on removal (see §7).</p>
+<li><strong>Pause / Resume</strong> and a <strong>0.5×/1×/2×/3× speed</strong> cycle are in the HUD.</li>
+<li><strong>Pan</strong> by dragging empty canvas space; <strong>zoom</strong> with the scroll wheel or</li>
+<p>the +/−/Reset buttons docked on the minimap panel.</p>
+<li><strong>Site Upgrades</strong> (top bar) applies a bulk upgrade to every eligible piece</li>
+<p>of equipment or cable at once, at a 15% discount vs. upgrading one at a time (see §7).</p>
+</ul>
+<h2 id="3-devices">3. Devices</h2>
+<h3 id="end-user-source-devices">End-user (source) devices</h3>
+<div class="table-wrap"><table><thead><tr>
+<th>Device</th>
+<th>Wired ports</th>
+<th>Traffic priority</th>
+<th>Base packet rate/tick</th>
+<th>Wi-Fi capable</th>
+</tr></thead><tbody>
+<tr>
+<td>PC</td>
+<td>1</td>
+<td>Bulk</td>
+<td>1</td>
+<td>Yes (backup)</td>
+</tr>
+<tr>
+<td>TV</td>
+<td>1</td>
+<td>Stream</td>
+<td>2</td>
+<td>Yes (backup)</td>
+</tr>
+<tr>
+<td>Console</td>
+<td>1</td>
+<td>Realtime</td>
+<td>1</td>
+<td>Yes (backup)</td>
+</tr>
+<tr>
+<td>Phone</td>
+<td>0</td>
+<td>Realtime</td>
+<td>1</td>
+<td><strong>Wi-Fi only</strong></td>
+</tr>
+<tr>
+<td>Tablet</td>
+<td>0</td>
+<td>Stream</td>
+<td>2</td>
+<td><strong>Wi-Fi only</strong></td>
+</tr>
+</tbody></table></div>
+<ul>
+<li>Phones and tablets have no wired ports — they can <em>only</em> connect through an</li>
+<p>access point's coverage circle. Every other end device keeps its wired port and can <em>additionally</em> join Wi-Fi coverage: a cabled PC sitting inside an access point's range gets a genuine second, independent route to the network (useful for the redundancy score bonus, §6).</p>
+<li>A source device with no path — no cable <em>and</em> no in-range access point —</li>
+<p>can't send its generated traffic anywhere; that traffic is simply lost for the tick (see §5 for how drops are counted).</p>
+<li>Rate is scaled up over time by the scenario's traffic ramp (§8) and by</li>
+<p>chance events like a traffic spike (§9).</p>
+</ul>
+<h3 id="infrastructure-devices">Infrastructure devices</h3>
+<div class="table-wrap"><table><thead><tr>
+<th>Device</th>
+<th>Cost</th>
+<th>Wired ports</th>
+<th>Base throughput (pkt/tick)</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td>Switch</td>
+<td>$80</td>
+<td>4</td>
+<td>8</td>
+<td>+2 ports / +4 pkt-tick upgrades</td>
+</tr>
+<tr>
+<td>Router</td>
+<td>$140</td>
+<td>8</td>
+<td>20</td>
+<td>Only device that may reach the Cloud</td>
+</tr>
+<tr>
+<td>Wireless (AP)</td>
+<td>$90</td>
+<td>1</td>
+<td>4 (base, by Wi-Fi generation)</td>
+<td>Single uplink port; see §4</td>
+</tr>
+<tr>
+<td>Firewall</td>
+<td>$110</td>
+<td>4</td>
+<td>12</td>
+<td>Can block multiple selected device kinds</td>
+</tr>
+<tr>
+<td>Server</td>
+<td>$120</td>
+<td>2</td>
+<td>Unlimited</td>
+<td>A cross-subnet traffic destination</td>
+</tr>
+<tr>
+<td>Load Balancer</td>
+<td>$150</td>
+<td>4</td>
+<td>24</td>
+<td>Highest base throughput; +10 pkt-tick upgrade only (no port upgrade)</td>
+</tr>
+<tr>
+<td>Cloud Edge</td>
+<td>—</td>
+<td>2</td>
+<td>Unlimited</td>
+<td>Fixed, present from the start</td>
+</tr>
+</tbody></table></div>
+<ul>
+<li><strong>Only the router may connect to the Cloud Edge.</strong> Every packet's final</li>
+<p>destination is the cloud (or, for cross-subnet traffic, another device — see §5), and the only door to the cloud is through a router.</p>
+<li><strong>No direct end-device-to-end-device links.</strong> Two source devices always</li>
+<p>need a piece of network equipment between them.</p>
+<li><strong>Duplicate links are rejected</strong> — you can't run two cables between the</li>
+<p>same pair of devices.</p>
+<li><strong>Port limits are enforced</strong> on both ends of a link; a device with no free</li>
+<p>ports refuses a new cable.</p>
+<li>Every forwarding device (router, switch, wireless, firewall, load balancer)</li>
+<p>admits only as many packets per tick as its current throughput allows, and does so in <strong>strict priority order</strong>: realtime traffic (phones, consoles) is served first, then stream (TVs, tablets), then bulk (PCs, routers/switches' onward hops). Packets that don't fit wait in a real queue at that device for up to 6 ticks before being dropped — you can see this queue depth live in that device's inspector.</p>
+<li><strong>Load balancers actually balance.</strong> If a load balancer has two or more</li>
+<p>equally-short paths onward to a packet's destination — for example two separate routers, each with their own cable to the Cloud Edge — outbound traffic spreads across those paths over time instead of every packet taking the same one. A shorter path is still always preferred; balancing only kicks in between paths of equal length.</p>
+<li><strong>Equipment wear and failure</strong> (equipment-failure scenarios only, §8):</li>
+<p>overloaded devices accrue wear. Past 20 wear, health starts dropping; health hitting 0 takes the device offline. An offline device blinks between its normal icon and an unplugged-cable icon on the canvas so it's easy to spot, and is excluded from routing entirely. <strong>Field repair</strong> costs $40, restores health to 100%, and brings it back online — but accumulated wear is <em>not</em> reset, so a repaired device fails faster next time unless you also upgrade or replace it.</p>
+</ul>
+<h2 id="4-wi-fi">4. Wi-Fi</h2>
+<ul>
+<li>An access point's <strong>range</strong> and <strong>base throughput</strong> come from its Wi-Fi</li>
+<p>generation, upgraded independently of everything else:</p>
+</ul>
+<div class="table-wrap"><table><thead><tr>
+<th>Generation</th>
+<th>Range</th>
+<th>Base pkt/tick</th>
+<th>Upgrade cost</th>
+</tr></thead><tbody>
+<tr>
+<td>802.11b</td>
+<td>14</td>
+<td>4</td>
+<td>$40</td>
+</tr>
+<tr>
+<td>802.11g</td>
+<td>18</td>
+<td>8</td>
+<td>$60</td>
+</tr>
+<tr>
+<td>802.11n</td>
+<td>22</td>
+<td>14</td>
+<td>$90</td>
+</tr>
+<tr>
+<td>Wi-Fi 5</td>
+<td>26</td>
+<td>22</td>
+<td>$130</td>
+</tr>
+<tr>
+<td>Wi-Fi 6</td>
+<td>30</td>
+<td>32</td>
+<td>$180</td>
+</tr>
+<tr>
+<td>Wi-Fi 6E</td>
+<td>34</td>
+<td>44</td>
+<td>$240</td>
+</tr>
+<tr>
+<td>Wi-Fi 7</td>
+<td>40</td>
+<td>60</td>
+<td>$999 (max)</td>
+</tr>
+</tbody></table></div>
+<ul>
+<li>An access point <em>also</em> has its own <strong>Faster forwarding</strong> upgrade (+2</li>
+<p>pkt/tick for $50, same button router/switch use) that stacks independently on top of its Wi-Fi generation — upgrading the generation later adds that generation's own jump without erasing the forwarding bonus.</p>
+<li>A wireless-capable device only counts as connected if it's physically</li>
+<p>inside a hub's coverage circle. Multiple hubs' zones can overlap; a client in overlapping range <strong>prefers whichever hub currently has fewer wireless-capable clients in range</strong> (load balancing), breaking ties by distance — not simply the nearest hub.</p>
+<li>Access points have exactly one wired port; they need one uplink cable back</li>
+<p>into your topology (to a switch or router) to actually reach the cloud.</p>
+<li><strong>Wi-Fi interference</strong> can randomly strike an access point (higher chance</li>
+<p>while it's actively serving clients): for 8–18 ticks its effective range drops to 60% and throughput to 50%. The coverage zone and the device inspector both flag this while it's active; it clears on its own.</p>
+</ul>
+<h2 id="5-routing-vlans-and-firewalls">5. Routing, VLANs, and firewalls</h2>
+<ul>
+<li>Every tick, the simulation finds the shortest available path from each</li>
+<p>source device to the cloud (or a cross-subnet destination) via breadth-first search over live cables and in-range Wi-Fi links.</p>
+<li><strong>Offline devices and failed cables are excluded</strong> from every route.</li>
+<li><strong>VLAN tags</strong>: cycle a cable through untagged → VLAN 1 → 2 → 3 → 4 →</li>
+<p>untagged. A tagged cable only carries traffic whose source device's subnet matches the VLAN — anything else is blocked from crossing that link. This lets you segment traffic (e.g. isolate guest devices) at the cost of extra planning.</p>
+<li><strong>Firewall block rules</strong>: a firewall can independently block traffic from</li>
+<p>PCs, TVs, consoles, phones, and tablets. Select any combination in the firewall inspector. Rejected packets travel to the firewall, flash red, and visibly drop there; if another valid route avoids that firewall, routing uses it.</p>
+<li><strong>Cross-subnet traffic</strong>: in every scenario except Home Network, about 30%</li>
+<p>of generated traffic targets another device on a different subnet (routed via the router) instead of the cloud — usually a server. This models internal traffic (e.g. desk-to-server) and rewards having more than one subnet reachable through your core.</p>
+<li><strong>Any topology edit</strong> (delete a cable, remove equipment, reroute, retag a</li>
+<p>VLAN, change a firewall rule) immediately clears in-flight packets, since their precomputed route may no longer be valid. The next tick rebuilds routes from the new topology.</p>
+</ul>
+<h2 id="6-scoring">6. Scoring</h2>
+<ul>
+<li><strong>Base delivery score</strong>: <code>10 × score multiplier × combo</code> for every packet</li>
+<p>delivered.</p>
+<li><strong>Score multiplier</strong> increases by 1 every 90 ticks, forever.</li>
+<li><strong>Clean-tick combo</strong>: every 5 consecutive ticks with zero dropped packets</li>
+<p>raises your combo multiplier by 1, up to 5×. Dropping 3+ packets in a single tick resets the combo to 1× immediately.</p>
+<li><strong>Redundancy bonus</strong>: +5 points on top of the base score for any delivered</li>
+<p>packet whose source has <strong>two independent (edge-disjoint) routes</strong> to its destination at that moment — i.e., a genuine backup path exists, not just the one that happened to be used.</p>
+<li><strong>Delivery milestones</strong>: each scenario has three cumulative-delivery</li>
+<p>thresholds that pay a one-time budget bonus (not score) the first time you cross them — e.g. Home Network pays $50 at 25 deliveries, $100 at 75, $200 at 150. Harder scenarios have higher thresholds and bigger payouts.</p>
+<li><strong>Network-health bonus</strong> (paid once, at game over): `round(survivingRatio ×</li>
+<p>deliveryRatio × 1000)<code>, where </code>survivingRatio<code> is (currently-connected source devices) ÷ (total source devices ever spawned), and </code>deliveryRatio` is (total delivered) ÷ (total generated) across every source device's lifetime. A network that stayed intact and kept up with demand scores much higher here than one that limped to the finish with half its devices dark.</p>
+</ul>
+<h2 id="7-economy">7. Economy</h2>
+<ul>
+<li><strong>Starting budget</strong> and <strong>difficulty</strong> vary by scenario (§8).</li>
+<li><strong>Passive income</strong>: every 15 ticks you receive `$25 + 5 × current score</li>
+<p>multiplier` — income grows as the run goes on.</p>
+<li><strong>Budget bonus events</strong> (§9) add a flat $75.</li>
+<li><strong>Delivery milestones</strong> (§6) add a one-time budget award.</li>
+<li><strong>Removing equipment or a cable</strong> refunds 90% of what you spent on it</li>
+<p>(build cost + every upgrade), rounded down.</p>
+<li><strong>Site Upgrades</strong> (top bar) bulk-apply an upgrade to every eligible piece</li>
+<p>of equipment or cable at once, for 15% less than upgrading them individually:</p>
+<li><strong>Cable rollout</strong> — pick a target tier (Fast Ethernet through 100</li>
+<p>Gigabit); every cable below that tier (except the fixed cloud uplink) jumps straight to it, paying for every intervening tier per cable.</p>
+<li><strong>Port expansion</strong> — +2 ports on every router and switch, $50 each</li>
+<p>before discount.</p>
+<li><strong>Switch/access-point throughput</strong> — the same "Faster forwarding" bump</li>
+<p>applied to every switch (or every access point) at once.</p>
+</ul>
+<h2 id="8-cable-tiers">8. Cable tiers</h2>
+<div class="table-wrap"><table><thead><tr>
+<th>Tier</th>
+<th>Capacity (pkt/tick)</th>
+<th>Upgrade cost</th>
+</tr></thead><tbody>
+<tr>
+<td>Copper</td>
+<td>2</td>
+<td>$50 (base)</td>
+</tr>
+<tr>
+<td>Fast Ethernet</td>
+<td>5</td>
+<td>$90</td>
+</tr>
+<tr>
+<td>Gigabit</td>
+<td>10</td>
+<td>$150</td>
+</tr>
+<tr>
+<td>5 Gigabit</td>
+<td>50</td>
+<td>$220</td>
+</tr>
+<tr>
+<td>10 Gigabit</td>
+<td>100</td>
+<td>$320</td>
+</tr>
+<tr>
+<td>25 Gigabit</td>
+<td>250</td>
+<td>$460</td>
+</tr>
+<tr>
+<td>50 Gigabit</td>
+<td>500</td>
+<td>$650</td>
+</tr>
+<tr>
+<td>100 Gigabit</td>
+<td>1000</td>
+<td>$999 (max)</td>
+</tr>
+</tbody></table></div>
+<ul>
+<li>A cable's <code>load</code> is the number of packets crossing it this tick. Above</li>
+<p>capacity it turns <strong>congested</strong> (orange) and starts dropping the overflow; a link left congested long enough under an equipment-failure scenario can fail outright and needs 4 ticks to recover (rerouting traffic around it in the meantime).</p>
+<li>Every cable shows a live label at its midpoint: its tier/speed on top, and</li>
+<p>current <code>load/capacity</code> traffic underneath, colored by status (green active, orange congested, red failed).</p>
+<li>The link legend at the bottom of the canvas explains the colors: green =</li>
+<p>active, gray = idle, orange = congested.</p>
+</ul>
+<h2 id="9-difficulty-pacing-and-scenarios">9. Difficulty, pacing, and scenarios</h2>
+<p>Every simulation tick (800ms at 1× speed) does, in order:</p>
+<ol>
+<li>Reset cable load; recover cables whose temporary fault has expired.</li>
+<li>Advance and (if arrived) deliver in-flight packets, scoring and updating</li>
+<p>latency/queue-delay telemetry.</p>
+<li>Tally traffic across every cable now carrying packets.</li>
+<li>Generate new traffic from every source device and resolve routes.</li>
+<li>Mark cables active/congested and apply forwarding-device capacity limits.</li>
+<li>Update wear, rolling failure pressure, combo, and passive income; bump</li>
+<p>the score multiplier and traffic rate on their own schedules.</p>
+<li>Spawn new devices, roll challenge events, apply Wi-Fi interference, check</li>
+<p>milestones, and evaluate game over.</p>
+</ol>
+<p>Traffic doesn't start at full intensity — each scenario <strong>eases demand in</strong> from a starting floor fraction up to 100% over its <code>warmupTicks</code>, so you have a quiet opening window to build. After <code>rampStart</code>, the traffic rate climbs 4% every 90 ticks, capping at 2.25× the base rate.</p>
+<p><strong>Challenge events</strong> roll every 90 ticks once a scenario's <code>challengeStart</code> tick is reached:</p>
+<ul>
+<li><strong>Traffic spike</strong> (35% chance) — doubles one device's demand for 10 ticks.</li>
+<p>Devices with a lower base rate are weighted <em>more</em> likely to be picked.</p>
+<li><strong>Equipment failure</strong> (equipment-failure scenarios only, up to 35% chance)</li>
+<p>— instantly fails a random online router/switch/access point/firewall, weighted toward whichever has accrued the most wear.</p>
+<li><strong>Budget bonus</strong> (up to 55% chance, or the equipment-failure slice's</li>
+<p>remainder in scenarios without equipment failure) — flat +$75.</p>
+<li><strong>Device surge</strong> (remaining ~10% chance) — spawns two new source devices</li>
+<p>at once.</p>
+</ul>
+<p>New source devices also spawn automatically once <code>spawnStart</code> is reached, every 150 ticks, cycling PC → Phone → Console → Tablet → TV, up to 20 total devices on the canvas.</p>
+<p><strong>Game over</strong> triggers once you're past the scenario's <code>gameOverCheck</code> tick <em>and</em> the rolling 20-tick drop window exceeds 30 total drops. Failure pressure (shown in the HUD) is exactly that ratio: <code>(drops in the last 20 ticks ÷ 30) × 100%</code>. At game over you can <strong>Try again</strong>, or <strong>Continue unscored</strong> — the run keeps going (failure pressure resets) but stops paying into the leaderboard and no further game-over check occurs.</p>
+<h3 id="the-twelve-scenarios">The twelve scenarios</h3>
+<p>Listed easiest to hardest (the menu is ordered the same way):</p>
+<div class="table-wrap"><table><thead><tr>
+<th>Scenario</th>
+<th>Difficulty</th>
+<th>Budget</th>
+<th>Equipment failure</th>
+<th>Gist</th>
+</tr></thead><tbody>
+<tr>
+<td>Home Network</td>
+<td>★☆☆☆☆</td>
+<td>$100</td>
+<td>No</td>
+<td>Small household; learn the basics.</td>
+</tr>
+<tr>
+<td>Café Hotspot</td>
+<td>★★☆☆☆</td>
+<td>$130</td>
+<td>No</td>
+<td>A counter plus a phone crowd on one hotspot.</td>
+</tr>
+<tr>
+<td>Startup Office</td>
+<td>★★☆☆☆</td>
+<td>$140</td>
+<td>No</td>
+<td>Two teams share infrastructure.</td>
+</tr>
+<tr>
+<td>School Lab</td>
+<td>★★★☆☆</td>
+<td>$190</td>
+<td>No</td>
+<td>A wired lab across three classrooms and a server.</td>
+</tr>
+<tr>
+<td>Corporate HQ</td>
+<td>★★★☆☆</td>
+<td>$180</td>
+<td>Yes</td>
+<td>Three subnets, a firewall, aging gear.</td>
+</tr>
+<tr>
+<td>Metro Campus</td>
+<td>★★★☆☆</td>
+<td>$200</td>
+<td>Yes</td>
+<td>Distributed switches, long paths reward redundancy.</td>
+</tr>
+<tr>
+<td>Branch Network</td>
+<td>★★★★☆</td>
+<td>$120</td>
+<td>Yes</td>
+<td>Tight budget; every port counts.</td>
+</tr>
+<tr>
+<td>Arena Night</td>
+<td>★★★★☆</td>
+<td>$240</td>
+<td>Yes</td>
+<td>Wireless crowd floods access points.</td>
+</tr>
+<tr>
+<td>ISP Hub</td>
+<td>★★★★☆</td>
+<td>$220</td>
+<td>Yes</td>
+<td>High-volume routing backbone.</td>
+</tr>
+<tr>
+<td>Data Center</td>
+<td>★★★★★</td>
+<td>$260</td>
+<td>Yes</td>
+<td>Heavy server-to-server east-west traffic.</td>
+</tr>
+<tr>
+<td>Edge Exchange</td>
+<td>★★★★★</td>
+<td>$260</td>
+<td>Yes</td>
+<td>Realtime services compete with bulk at the edge.</td>
+</tr>
+<tr>
+<td>Smart City</td>
+<td>★★★★★</td>
+<td>$280</td>
+<td>Yes</td>
+<td>Wired + wireless + firewall + core, fastest ramp.</td>
+</tr>
+</tbody></table></div>
+<p>Corporate HQ, Metro Campus, ISP Hub, Data Center, and Smart City start with a <strong>dual-router core</strong>: a second router with its own Cloud Edge uplink, bridged to both subnet switches through a load balancer. Outbound traffic naturally splits across both routers (see the load balancer note in §3) — losing one uplink to equipment failure doesn't take the whole network down with it. Data Center adds a second server on a different subnet for heavier east-west traffic, and Smart City layers a wireless crowd on top of the wired core. Every non-Home scenario starts with one unconnected end device per subnet (Desk-A1, Display-B) — wiring them in (and building more as your budget and the run's own device spawns allow) is on you.</p>
+<p>Starting a run always opens with a short <strong>briefing</strong> for that scenario: its objective and a few concrete first steps for its actual starting layout. It reappears every time you start a new run of that scenario, not just the first — it's scenario context, not a one-time tutorial.</p>
+<h2 id="10-reading-the-hud-and-inspectors">10. Reading the HUD and inspectors</h2>
+<ul>
+<li><strong>Score / multiplier</strong>, <strong>Delivered</strong>, <strong>Dropped</strong>, <strong>Combo</strong>, <strong>Budget</strong>,</li>
+<p>and <strong>Failure pressure</strong> (with a live bar) sit across the top.</p>
+<li><strong>Run Stats</strong> (footer button) adds delivered/dropped totals, clean combo,</li>
+<p>the rolling drop window, traffic ramp, and the two telemetry averages: <strong>average delivery latency</strong> (ticks from generation to arrival) and <strong>average queue delay</strong> (ticks spent waiting in a forwarding device's queue) — both rolling averages weighted 75% history / 25% latest tick.</p>
+<li><strong>Device inspector</strong> shows status, ports, health/wear, throughput (with a</li>
+<p>live load bar for forwarding devices), delivered/generated, Wi-Fi link status, independent-path count, and — for wireless — current Wi-Fi generation and interference state.</p>
+<li><strong>Cable inspector</strong> shows tier, live traffic, status, age, style, and VLAN,</li>
+<p>plus upgrade/reroute/delete actions.</p>
+<li><strong>Minimap</strong> (canvas corner) gives a always-visible overview of every device</li>
+<p>and cable, plus each access point's coverage outline, regardless of how far you've zoomed or panned the main canvas.</p>
+<li><strong>Live Events</strong> (bottom-left) is a short feed of what just happened,</li>
+<p>each entry timestamped with the tick it occurred on.</p>
+<li><strong>Jackie</strong>, the advisor (bottom-center), surfaces one contextual tip at a</li>
+<p>time — whichever is most urgent: high failure pressure, a congested link, an out-of-range device, low budget, queue buildup, or (if nothing's wrong) a note on your current combo streak.</p>
+</ul>
+<h2 id="11-personal-leaderboard">11. Personal leaderboard</h2>
+<p>Every completed run — win or lose — is recorded locally (10 highest scores kept) with its scenario, score, delivered count, and tick count. Browse it from the main menu, from Run Stats, or from the game-over screen. There's no server-side leaderboard; scores never leave your browser.</p>
+<h2 id="12-strategy-tips">12. Strategy tips</h2>
+<ul>
+<li><strong>Build redundancy before you need it.</strong> A second independent path to the</li>
+<p>cloud (through a different switch/router) both prevents a single failed link from taking down a device <em>and</em> pays a small score bonus on every delivery that uses it.</p>
+<li><strong>Watch cable labels, not just colors.</strong> The live <code>load/capacity</code> figure</li>
+<p>tells you exactly how much headroom is left before a link turns congested — upgrade before it does, not after.</p>
+<li><strong>Priority matters at every hop, not just the edge.</strong> A congested</li>
+<p>router/switch drops <em>bulk</em> traffic first under strict priority admission; if your realtime devices (consoles, phones) are still getting through but PCs are queuing, that's the forwarding device's capacity, not the cable.</p>
+<li><strong>Wi-Fi is now a backup for wired devices too.</strong> Placing an access point</li>
+<p>so it also covers an already-cabled PC or TV gives that device a second route for free — no extra cable needed.</p>
+<li><strong>Don't let repaired equipment lull you.</strong> Field repair resets health, not</li>
+<p>wear — a device you've repaired once will fail faster the next time it's overloaded, so pair a repair with an upgrade if you can afford it.</p>
+<li><strong>Site Upgrades save real money</strong> once you have more than two or three of</li>
+<p>something — the 15% discount adds up fast on a big topology.</p>
+<li><strong>Read Jackie.</strong> The advisor always tells you the single most urgent thing</li>
+<p>to fix; when in doubt, do what Jackie says next.</p>
+</ul>
+    </main>
+  </body>
+</html>

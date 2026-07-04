@@ -1,4 +1,4 @@
-import type { GameState } from '../types'
+import type { Device, GameState } from '../types'
 import { DEVICE_RULES, SCENARIOS } from './constants'
 import { createScenarioTopology } from './factories'
 
@@ -18,7 +18,7 @@ export function newGame(scenario = 'home'): GameState {
       ).length),
   )
   return {
-    version: 8,
+    version: 9,
     phase: 'playing',
     scenario: scenarioConfig.id,
     tick: 0,
@@ -69,7 +69,8 @@ export function networkHealthBonus(state: GameState): number {
  * old to migrate safely. Version 2 runs predate challenge events and milestones;
  * version 3 runs predate Wi-Fi interference; version 4 runs predate per-packet
  * queue admission; version 5 runs predate cable styles; version 6 runs predate
- * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps.
+ * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps;
+ * version 8 runs predate multi-select firewall rules.
  * Older or malformed saves are discarded.
  *
  * @param savedGame - Parsed persisted state with a schema version.
@@ -81,7 +82,7 @@ export function migrateSavedGame(
   if (savedGame.version === 2) {
     savedGame.devices?.forEach((device) => {
       device.upgradeSpend ??= 0
-      device.firewallRule ??= null
+      ;(device as typeof device & { firewallRule?: string | null }).firewallRule ??= null
     })
     savedGame.milestonesReached ??= []
     savedGame.activeEvents ??= []
@@ -121,5 +122,16 @@ export function migrateSavedGame(
     }))
     savedGame.version = 8
   }
-  return savedGame.version === 8 ? (savedGame as GameState) : null
+  if (savedGame.version === 8) {
+    savedGame.devices?.forEach((device) => {
+      const legacyRule = (device as typeof device & { firewallRule?: Device['kind'] | null })
+        .firewallRule
+      device.firewallRules = legacyRule ? [legacyRule] : []
+      delete (device as typeof device & { firewallRule?: Device['kind'] | null }).firewallRule
+    })
+    // Transient packets may predate the firewall-drop animation state.
+    savedGame.packets = []
+    savedGame.version = 9
+  }
+  return savedGame.version === 9 ? (savedGame as GameState) : null
 }

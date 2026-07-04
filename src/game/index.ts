@@ -41,12 +41,12 @@ export {
   addCable,
   buildDevice,
   cycleCableVlan,
-  cycleFirewallRule,
   deleteCable,
   deviceRemovalRefund,
   moveDevice,
   removeDevice,
   rerouteCable,
+  toggleFirewallRule,
 } from './topology'
 
 /** Individual and site-wide equipment upgrade operations. */

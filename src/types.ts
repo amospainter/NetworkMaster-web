@@ -52,7 +52,8 @@ export type Device = {
   wifiLevel: number
   /** Upgrade dollars eligible for salvage when the device is removed. */
   upgradeSpend: number
-  firewallRule: DeviceKind | null
+  /** Source-device kinds this firewall rejects; empty for no active block rules. */
+  firewallRules: DeviceKind[]
   generated: number
   delivered: number
   /** Ticks remaining of Wi-Fi interference (wireless access points only); shrinks range/throughput. */
@@ -110,12 +111,14 @@ export type Packet = {
   generatedTick: number
   /** Ticks this packet has spent waiting in a forwarding device's queue. */
   queuedTicks: number
+  /** Packet has reached a firewall that blocks its owner and is playing its drop animation. */
+  droppingAtFirewall?: boolean
 }
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
   /** Save-schema discriminator. Increment when migrations require a new persisted shape. */
-  version: 8
+  version: 9
   phase: 'playing' | 'paused' | 'gameover'
   scenario: string
   tick: number

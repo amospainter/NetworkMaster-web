@@ -254,21 +254,29 @@ export function cycleCableVlan(state: GameState, cableId: string): GameState {
 }
 
 /**
- * Cycles a firewall rule through no block, PC, TV, and console traffic.
+ * Toggles one source-device kind in a firewall's block rules.
  *
  * @param state - Current game state.
  * @param deviceId - Firewall device identifier.
+ * @param kind - Source-device kind to toggle.
  * @returns Updated state, or the original state for a missing/non-firewall device.
  */
-export function cycleFirewallRule(state: GameState, deviceId: string): GameState {
+export function toggleFirewallRule(
+  state: GameState,
+  deviceId: string,
+  kind: DeviceKind,
+): GameState {
   const nextState = cloneState(state)
   const firewall = nextState.devices.find((device) => device.id === deviceId)
   if (!firewall || firewall.kind !== 'firewall') return state
-  const rules: (DeviceKind | null)[] = [null, 'pc', 'tv', 'console']
-  const nextRuleIndex = (rules.indexOf(firewall.firewallRule) + 1) % rules.length
-  firewall.firewallRule = rules[nextRuleIndex]
+  firewall.firewallRules = firewall.firewallRules.includes(kind)
+    ? firewall.firewallRules.filter((rule) => rule !== kind)
+    : [...firewall.firewallRules, kind]
   nextState.packets = []
-  addEvent(nextState, `${firewall.label} block rule: ${firewall.firewallRule ?? 'none'}.`)
+  addEvent(
+    nextState,
+    `${firewall.label} block rules: ${firewall.firewallRules.join(', ') || 'none'}.`,
+  )
   return nextState
 }
 
