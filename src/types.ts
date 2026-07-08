@@ -12,6 +12,7 @@ export type DeviceKind =
   | 'firewall'
   | 'wireless'
   | 'loadBalancer'
+  | 'honeypot'
 
 /**
  * Persisted cable upgrade identifiers, ordered separately by `CABLE_TIERS`.
@@ -58,6 +59,8 @@ export type Device = {
   delivered: number
   /** Ticks remaining of Wi-Fi interference (wireless access points only); shrinks range/throughput. */
   interference: number
+  /** Ignores power-outage zones; purchasable on eligible infrastructure kinds. */
+  ups: boolean
 }
 
 /** An undirected, capacity-limited edge in the network graph. */
@@ -79,7 +82,8 @@ export type Cable = {
 }
 
 /** Kinds of timed challenge event the simulation can roll, mirroring the native roster. */
-export type ChallengeEventKind = 'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure'
+export type ChallengeEventKind =
+  'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure' | 'ddos' | 'powerOutage'
 
 /** A timed challenge event; only `trafficSpike` lingers across ticks via `ticksRemaining`. */
 export type ActiveEvent = {
@@ -87,6 +91,11 @@ export type ActiveEvent = {
   kind: ChallengeEventKind
   ticksRemaining: number
   targetId: string | null
+  /** Device ids a `powerOutage` event took offline, restored (if still `health > 0`) on expiry. */
+  affectedIds?: string[]
+  /** Canvas-percent center of a `powerOutage` zone, for rendering its ring. */
+  centerX?: number
+  centerY?: number
 }
 
 /** A live-feed entry, stamped with the tick it happened on rather than inferred from list position. */
@@ -113,13 +122,17 @@ export type Packet = {
   queuedTicks: number
   /** Packet has reached a firewall that blocks its owner and is playing its drop animation. */
   droppingAtFirewall?: boolean
+  /** DDoS attack traffic: consumes cable/admission capacity but never scores, and its drops don't count toward `dropped`/failure pressure. */
+  junk?: boolean
 }
 
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
   /** Save-schema discriminator. Increment when migrations require a new persisted shape. */
-  version: 9
+  version: 11
   phase: 'playing' | 'paused' | 'gameover'
+  /** Sandbox runs skip budget gating and game over, and never write scores. */
+  mode: 'normal' | 'sandbox'
   scenario: string
   tick: number
   score: number
@@ -153,6 +166,24 @@ export type GameState = {
   recentLatencyTicks: number
   /** Rolling per-packet queue delay in ticks accrued waiting at forwarding-device queues, same 75/25 weighting. */
   recentQueueDelayTicks: number
+  /** Per-tick telemetry samples for the run-history chart, downsampled as the run grows. */
+  history: HistorySample[]
+  /** Current sampling stride: one sample is recorded every `historyStride` ticks. */
+  historyStride: number
+  /** Number of challenge-event roll windows that have occurred; gates when hostile events (DDoS/power outage) can first appear. */
+  challengeRollCount: number
+}
+
+/** One compact per-tick telemetry sample for the run-history chart. */
+export type HistorySample = {
+  /** Simulation tick this sample was taken at. */
+  t: number
+  /** Score at this tick. */
+  s: number
+  /** Failure pressure (0-100) at this tick. */
+  f: number
+  /** Rolling delivery latency in ticks at this tick. */
+  l: number
 }
 
 /** A completed run recorded for the local, score-sorted leaderboard. */
@@ -187,4 +218,6 @@ export type Scenario = {
   objective: string
   /** Concrete first actions for this scenario's actual starting topology, shown in the start-of-run briefing. */
   firstSteps: string[]
+  /** Overrides the global peak-hours demand-wave amplitude for this scenario. */
+  peakAmplitude?: number
 }

@@ -3,9 +3,11 @@ import {
   CABLE_TIERS,
   FORWARDING_SPEED_COSTS,
   FORWARDING_SPEED_GAIN,
+  UPS_COST,
+  UPS_ELIGIBLE_KINDS,
   WIFI_STANDARDS,
 } from './constants'
-import { addEvent, cloneState, discountedSiteCost, event } from './utils'
+import { addEvent, canAfford, cloneState, discountedSiteCost, event, spendBudget } from './utils'
 
 /**
  * Advances a cable by one tier and records its refundable player investment.
@@ -22,7 +24,7 @@ export function upgradeCable(state: GameState, cableId: string): GameState {
     next = CABLE_TIERS[i + 1]
   if (!next) return state
   const cost = CABLE_TIERS[i].cost
-  if (s.budget < cost)
+  if (!canAfford(s, cost))
     return {
       ...state,
       events: [event(state, 'Insufficient budget for cable upgrade.'), ...state.events].slice(0, 6),
@@ -30,7 +32,7 @@ export function upgradeCable(state: GameState, cableId: string): GameState {
   c.tier = next.name
   c.capacity = next.capacity
   c.upgradeSpend += cost
-  s.budget -= cost
+  spendBudget(s, cost)
   addEvent(s, `Cable upgraded to ${next.name}.`)
   return s
 }
@@ -43,7 +45,7 @@ export function upgradeCable(state: GameState, cableId: string): GameState {
  * @returns Updated state, or the original/event-bearing state when upgrade is unavailable.
  */
 export function upgradeDevicePorts(state: GameState, deviceId: string): GameState {
-  if (state.budget < 50)
+  if (!canAfford(state, 50))
     return {
       ...state,
       events: [event(state, 'Insufficient budget for port expansion.'), ...state.events].slice(
@@ -56,7 +58,7 @@ export function upgradeDevicePorts(state: GameState, deviceId: string): GameStat
   if (!d || !['router', 'switch'].includes(d.kind)) return state
   d.maxPorts += 2
   d.upgradeSpend += 50
-  s.budget -= 50
+  spendBudget(s, 50)
   addEvent(s, `${d.label} expanded by 2 ports.`)
   return s
 }
@@ -73,10 +75,10 @@ export function upgradeDeviceSpeed(state: GameState, deviceId: string): GameStat
     d = s.devices.find((x) => x.id === deviceId)
   if (!d || !(d.kind in FORWARDING_SPEED_COSTS)) return state
   const upgradeCost = FORWARDING_SPEED_COSTS[d.kind]!
-  if (s.budget < upgradeCost) return state
+  if (!canAfford(s, upgradeCost)) return state
   d.pps += FORWARDING_SPEED_GAIN[d.kind]!
   d.upgradeSpend += upgradeCost
-  s.budget -= upgradeCost
+  spendBudget(s, upgradeCost)
   addEvent(s, `${d.label} forwarding capacity upgraded.`)
   return s
 }
@@ -95,13 +97,33 @@ export function upgradeWifi(state: GameState, deviceId: string): GameState {
     d = s.devices.find((x) => x.id === deviceId)
   if (!d || d.kind !== 'wireless' || d.wifiLevel >= WIFI_STANDARDS.length - 1) return state
   const cost = WIFI_STANDARDS[d.wifiLevel].cost
-  if (s.budget < cost) return state
+  if (!canAfford(s, cost)) return state
   const previousBasePps = WIFI_STANDARDS[d.wifiLevel].pps
   d.wifiLevel++
   d.pps += WIFI_STANDARDS[d.wifiLevel].pps - previousBasePps
   d.upgradeSpend += cost
-  s.budget -= cost
+  spendBudget(s, cost)
   addEvent(s, `${d.label} upgraded to ${WIFI_STANDARDS[d.wifiLevel].name}.`)
+  return s
+}
+
+/**
+ * Purchases a UPS for an eligible infrastructure device, immunizing it against
+ * power-outage events.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Device to protect.
+ * @returns Updated state, or the original state when the purchase is unavailable.
+ */
+export function upgradeUps(state: GameState, deviceId: string): GameState {
+  const s = cloneState(state),
+    d = s.devices.find((x) => x.id === deviceId)
+  if (!d || d.ups || !UPS_ELIGIBLE_KINDS.includes(d.kind)) return state
+  if (!canAfford(s, UPS_COST)) return state
+  d.ups = true
+  d.upgradeSpend += UPS_COST
+  spendBudget(s, UPS_COST)
+  addEvent(s, `${d.label} fitted with a UPS — immune to power outages.`)
   return s
 }
 
@@ -113,13 +135,13 @@ export function upgradeWifi(state: GameState, deviceId: string): GameState {
  * @returns Updated state, or the original state when the repair cannot be purchased.
  */
 export function repairDevice(state: GameState, deviceId: string): GameState {
-  if (state.budget < 40) return state
+  if (!canAfford(state, 40)) return state
   const s = cloneState(state),
     d = s.devices.find((x) => x.id === deviceId)
   if (!d) return state
   d.health = 100
   d.offline = false
-  s.budget -= 40
+  spendBudget(s, 40)
   addEvent(s, `${d.label} repaired; accumulated wear remains.`)
   return s
 }
@@ -182,7 +204,7 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
   const targets = siteCableUpgradeTargets(state, target)
   const cost = discountedSiteCost(siteCableUpgradeFullCost(state, target))
   const targetTier = CABLE_TIERS.find((tier) => tier.name === target)!
-  if (!targets.length || state.budget < cost)
+  if (!targets.length || !canAfford(state, cost))
     return {
       ...state,
       events: [
@@ -204,7 +226,7 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
       c.capacity = targetTier.capacity
       c.upgradeSpend += Math.floor(cost / targets.length)
     })
-  s.budget -= cost
+  spendBudget(s, cost)
   addEvent(s, `Site upgrade: ${targets.length} links moved to ${target}.`)
   return s
 }
@@ -218,7 +240,7 @@ export function upgradeAllCables(state: GameState, target: CableTier): GameState
 export function upgradeAllPorts(state: GameState): GameState {
   const targets = state.devices.filter((d) => ['router', 'switch'].includes(d.kind)),
     cost = discountedSiteCost(targets.length * 50)
-  if (!targets.length || state.budget < cost)
+  if (!targets.length || !canAfford(state, cost))
     return {
       ...state,
       events: [event(state, 'Insufficient budget for site port expansion.'), ...state.events].slice(
@@ -233,7 +255,7 @@ export function upgradeAllPorts(state: GameState): GameState {
       d.maxPorts += 2
       d.upgradeSpend += Math.floor(cost / targets.length)
     })
-  s.budget -= cost
+  spendBudget(s, cost)
   addEvent(s, 'Site upgrade: +2 ports on all network equipment.')
   return s
 }
@@ -247,7 +269,7 @@ export function upgradeAllPorts(state: GameState): GameState {
 export function upgradeAllSwitchSpeed(state: GameState): GameState {
   const switches = state.devices.filter((device) => device.kind === 'switch')
   const cost = discountedSiteCost(switches.length * 60)
-  if (!switches.length || state.budget < cost) {
+  if (!switches.length || !canAfford(state, cost)) {
     return {
       ...state,
       events: [
@@ -263,7 +285,7 @@ export function upgradeAllSwitchSpeed(state: GameState): GameState {
       networkSwitch.pps += 4
       networkSwitch.upgradeSpend += Math.floor(cost / switches.length)
     })
-  nextState.budget -= cost
+  spendBudget(nextState, cost)
   addEvent(nextState, `Site upgrade: faster forwarding on ${switches.length} switches.`)
   return nextState
 }

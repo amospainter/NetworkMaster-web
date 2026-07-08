@@ -5,7 +5,7 @@ import globals from 'globals'
 import typescript from 'typescript-eslint'
 
 export default typescript.config(
-  { ignores: ['dist/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'node_modules/**', '.claude/worktrees/**'] },
   eslint.configs.recommended,
   ...typescript.configs.recommended,
   ...vue.configs['flat/recommended'],

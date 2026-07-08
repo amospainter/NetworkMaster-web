@@ -849,6 +849,11 @@ nav > div {
 .packet.stream {
   background: #60d7ff;
 }
+.packet.junk {
+  background: transparent;
+  border: 1.5px dashed #ff3b30;
+  box-shadow: none;
+}
 .packet.firewall-drop {
   z-index: 5;
   background: #ff3b30;

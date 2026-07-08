@@ -15,6 +15,7 @@ import { computeCableRoutes, pointAlongRoute, routeToSvgPath } from './cableGeom
 import BuildPanel from './components/BuildPanel.vue'
 import GameHud from './components/GameHud.vue'
 import GameOverModal from './components/GameOverModal.vue'
+import RunHistoryChart from './components/RunHistoryChart.vue'
 import HoverTooltip from './components/HoverTooltip.vue'
 import MenuScreen from './components/MenuScreen.vue'
 import PacketLayer from './components/PacketLayer.vue'
@@ -40,6 +41,8 @@ import {
   migrateSavedGame,
   moveDevice,
   newGame,
+  OUTAGE_RADIUS,
+  PEAK_PERIOD_TICKS,
   repairDevice,
   removeDevice,
   rerouteCable,
@@ -55,7 +58,10 @@ import {
   upgradeCable,
   upgradeDevicePorts,
   upgradeDeviceSpeed,
+  upgradeUps,
   upgradeWifi,
+  UPS_COST,
+  UPS_ELIGIBLE_KINDS,
   wifiInfo,
   WIRELESS_CAPABLE_KINDS,
 } from './game'
@@ -145,6 +151,8 @@ const helpSection = ref<(typeof HELP_SECTIONS)[number]>('Basics')
 const cableUpgradeTarget = ref<CableTier>('Fast Ethernet')
 const dark = ref(true)
 const chosen = ref('home')
+/** Menu-side sandbox toggle; consumed once by `start()` when launching a new run. */
+const sandboxSelected = ref(false)
 const best = ref(Number(localStorage.getItem(HIGH_SCORE_STORAGE_KEY) || 0))
 const { leaderboard } = useLeaderboard(game)
 const { tutorialStep, tutorialActive, dismissTutorial, advanceTutorial } = useTutorial()
@@ -214,6 +222,23 @@ function wirelessHubLabel(deviceId: string): string | null {
 function wifiZoneDiameter(hub: Device): number {
   return hubRange(hub) * 2
 }
+/** Id of the switch currently targeted by an active DDoS event, if any. */
+const ddosTargetId = computed(
+  () => game.value?.activeEvents.find((e) => e.kind === 'ddos')?.targetId ?? null,
+)
+/** Active power-outage zones, positioned/sized for the canvas ring overlay. */
+const outageZones = computed(
+  () =>
+    game.value?.activeEvents
+      .filter((e) => e.kind === 'powerOutage' && e.centerX !== undefined && e.centerY !== undefined)
+      .map((e) => ({
+        id: e.id,
+        centerX: e.centerX!,
+        centerY: e.centerY!,
+        diameter: OUTAGE_RADIUS * 2,
+        ticksRemaining: e.ticksRemaining,
+      })) ?? [],
+)
 
 /**
  * Counts packets waiting in a forwarding device's strict-priority queue.
@@ -330,6 +355,9 @@ const advisorTip = computed(() => {
   if (currentGame.recentQueueDelayTicks > 2)
     return 'Packets are queuing at a forwarding device — boost its throughput or add a path around it.'
   if (currentGame.combo >= 3) return `Nice streak — a ${currentGame.combo}× combo is building.`
+  const peakSwing = Math.sin((2 * Math.PI * currentGame.tick) / PEAK_PERIOD_TICKS)
+  if (peakSwing > 0.3 && peakSwing < 0.95)
+    return 'Demand is climbing toward its daily peak — make sure capacity is ahead of it.'
   return 'Network looks steady. Keep an eye on capacity as traffic ramps up.'
 })
 
@@ -411,7 +439,7 @@ function scheduleActiveRunPersist() {
  */
 watch(game, (currentGame) => {
   if (!currentGame) return
-  if (currentGame.score > best.value) {
+  if (currentGame.mode !== 'sandbox' && currentGame.score > best.value) {
     best.value = currentGame.score
     localStorage.setItem(HIGH_SCORE_STORAGE_KEY, String(currentGame.score))
   }
@@ -425,7 +453,7 @@ watch(game, (currentGame) => {
  * @returns Nothing; reactive game and screen state are replaced.
  */
 function start(scenarioId: string) {
-  game.value = newGame(scenarioId)
+  game.value = newGame(scenarioId, sandboxSelected.value ? 'sandbox' : 'normal')
   screen.value = 'game'
   selected.value = null
   canvasInteractionCount.value = 0
@@ -804,6 +832,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
       v-if="screen === 'menu'"
       v-model:chosen="chosen"
       v-model:dark="dark"
+      v-model:sandbox="sandboxSelected"
       :game="game"
       :best="best"
       @start="start"
@@ -821,7 +850,11 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         @open-leaderboard="modal = 'leaderboard'"
       />
       <div class="workspace" :class="{ 'inspector-open': picked || pickedCable }">
-        <BuildPanel :budget="game.budget" :active-kind="placingKind" @select="armBuildTool" />
+        <BuildPanel
+          :budget="game.mode === 'sandbox' ? Infinity : game.budget"
+          :active-kind="placingKind"
+          @select="armBuildTool"
+        />
         <div
           class="canvas"
           :class="{ placing: placingKind }"
@@ -885,6 +918,19 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   : wifiInfo(hub)!.name
               }}</span>
             </div>
+            <div
+              v-for="outage in outageZones"
+              :key="'outage-' + outage.id"
+              class="outage-zone"
+              :style="{
+                left: outage.centerX + '%',
+                top: outage.centerY + '%',
+                width: outage.diameter + '%',
+                height: outage.diameter + '%',
+              }"
+            >
+              <span>OUTAGE · {{ outage.ticksRemaining }}t</span>
+            </div>
             <button
               v-for="d in game.devices"
               :key="d.id"
@@ -908,6 +954,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   class="icon-unplugged"
               /></span>
               <b>{{ d.label }}</b
+              ><small v-if="ddosTargetId === d.id" class="attack-badge">ATTACK</small
               ><small
                 v-if="WIRELESS_CAPABLE_KINDS.includes(d.kind) && d.ports === 0"
                 class="wifi-badge"
@@ -1171,6 +1218,17 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   >
                 </button>
               </div>
+              <div v-if="UPS_ELIGIBLE_KINDS.includes(picked.kind)" class="device-upgrades">
+                <button v-if="picked.ups" disabled class="ups-active"><Zap /> UPS installed</button>
+                <button
+                  v-else
+                  :disabled="game.budget < UPS_COST"
+                  @click="setGame(upgradeUps(game!, picked!.id))"
+                >
+                  <Zap /> Install UPS · outage-proof
+                  <b :class="{ 'danger-text': game.budget < UPS_COST }">${{ UPS_COST }}</b>
+                </button>
+              </div>
               <button
                 v-if="picked.health < 100"
                 class="wide"
@@ -1383,6 +1441,14 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   Equipment can wear down and fail outright in harder scenarios — an offline device
                   blinks on the canvas. Field repair ($40) restores health but not wear.
                 </li>
+                <li>
+                  A <b>Honeypot</b> ($70) does nothing until a DDoS attack starts, then lures a
+                  share of the junk traffic away from its real target and absorbs it.
+                </li>
+                <li>
+                  A UPS ($45) makes eligible infrastructure immune to power-outage events — install
+                  it from that device's inspector.
+                </li>
               </ol>
             </div>
             <div v-else-if="helpSection === 'Scoring & economy'">
@@ -1425,17 +1491,41 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 </li>
                 <li>
                   Challenge events roll periodically: traffic spikes, budget bonuses, device surges,
-                  and — in harder scenarios — outright equipment failure.
+                  and — in harder scenarios — outright equipment failure, DDoS attacks, and power
+                  outages (the latter two only once a run has settled in).
+                </li>
+                <li>
+                  A <b>DDoS attack</b> floods a target switch's subnet with junk traffic for several
+                  ticks — it congests links and can displace real packets, but the junk itself never
+                  scores or drops against you. Any firewall along the way absorbs junk
+                  automatically; a Honeypot lures some of it away entirely.
+                </li>
+                <li>
+                  A <b>power outage</b> knocks every unprotected device in a zone offline for a
+                  while — a UPS-equipped device rides it out unaffected.
+                </li>
+                <li>
+                  Demand follows a slow "peak hours" cycle on top of the traffic ramp — expect a
+                  gentle daily swing between busier and quieter stretches once warmup ends.
                 </li>
                 <li>
                   At game over you can <b>Try again</b> or <b>Continue unscored</b> to keep playing
                   without further leaderboard scoring.
                 </li>
                 <li>
+                  <b>Sandbox mode</b> (menu checkbox) removes budget limits and game over entirely
+                  for free-form topology experimentation — sandbox runs are unscored and never touch
+                  your leaderboard or personal best.
+                </li>
+                <li>
                   Watch <b>Jackie</b> (bottom of the canvas) — it always surfaces the single most
                   urgent thing to fix right now.
                 </li>
                 <li>Every completed run is saved to your local Leaderboard, win or lose.</li>
+                <li>
+                  <b>Run Stats</b> (bottom bar) includes a score/failure-pressure/latency history
+                  chart for the current run, also shown on the game-over screen.
+                </li>
               </ol>
             </div></template
           ><template v-else-if="modal === 'upgrades'"
@@ -1514,6 +1604,7 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
             <div class="stat">
               <span>Avg. queue delay</span><b>{{ game?.recentQueueDelayTicks.toFixed(1) }} ticks</b>
             </div>
+            <RunHistoryChart v-if="game && game.history.length > 1" :history="game.history" />
             <button class="wide" @click="modal = 'leaderboard'">View leaderboard</button></template
           ><template v-else-if="modal === 'leaderboard'"
             ><p class="overline">PERSONAL LEADERBOARD</p>

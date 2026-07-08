@@ -6,9 +6,10 @@ import { createScenarioTopology } from './factories'
  * Creates a fresh, serializable run for the requested scenario.
  *
  * @param scenario - Scenario identifier; unknown values use the first configured scenario.
+ * @param mode - Sandbox runs skip budget gating and game over, and never write scores.
  * @returns A version-current game state with a newly generated topology.
  */
-export function newGame(scenario = 'home'): GameState {
+export function newGame(scenario = 'home', mode: GameState['mode'] = 'normal'): GameState {
   const scenarioConfig = SCENARIOS.find((candidate) => candidate.id === scenario) ?? SCENARIOS[0]
   const topology = createScenarioTopology(scenarioConfig.id)
   topology.devices.forEach(
@@ -18,8 +19,9 @@ export function newGame(scenario = 'home'): GameState {
       ).length),
   )
   return {
-    version: 9,
+    version: 11,
     phase: 'playing',
+    mode,
     scenario: scenarioConfig.id,
     tick: 0,
     score: 0,
@@ -43,6 +45,9 @@ export function newGame(scenario = 'home'): GameState {
     activeEvents: [],
     recentLatencyTicks: 0,
     recentQueueDelayTicks: 0,
+    history: [],
+    historyStride: 1,
+    challengeRollCount: 0,
   }
 }
 
@@ -70,7 +75,9 @@ export function networkHealthBonus(state: GameState): number {
  * version 3 runs predate Wi-Fi interference; version 4 runs predate per-packet
  * queue admission; version 5 runs predate cable styles; version 6 runs predate
  * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps;
- * version 8 runs predate multi-select firewall rules.
+ * version 8 runs predate multi-select firewall rules; version 9 runs predate
+ * sandbox mode and run-history telemetry; version 10 runs predate DDoS/power-outage
+ * events, honeypots, and UPS upgrades.
  * Older or malformed saves are discarded.
  *
  * @param savedGame - Parsed persisted state with a schema version.
@@ -133,5 +140,20 @@ export function migrateSavedGame(
     savedGame.packets = []
     savedGame.version = 9
   }
-  return savedGame.version === 9 ? (savedGame as GameState) : null
+  if (savedGame.version === 9) {
+    savedGame.mode ??= 'normal'
+    savedGame.history ??= []
+    savedGame.historyStride ??= 1
+    savedGame.version = 10
+  }
+  if (savedGame.version === 10) {
+    savedGame.devices?.forEach((device) => {
+      device.ups ??= false
+    })
+    savedGame.challengeRollCount ??= 0
+    // Transient packets may predate the junk-packet shape.
+    savedGame.packets = []
+    savedGame.version = 11
+  }
+  return savedGame.version === 11 ? (savedGame as GameState) : null
 }

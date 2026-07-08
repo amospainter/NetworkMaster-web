@@ -54,6 +54,7 @@ function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
       <Network /><span>NETWORK<span>MASTER</span></span>
     </div>
     <div class="scenario-tag">{{ SCENARIOS.find((s) => s.id === game.scenario)?.name }}</div>
+    <div v-if="game.mode === 'sandbox'" class="scenario-tag sandbox-tag">SANDBOX · UNSCORED</div>
     <div class="top-actions">
       <button class="upgrade-nav" @click="emit('openUpgrades')"><Zap /> Site Upgrades</button
       ><button @click="emit('openHelp')"><HelpCircle /> Help</button
@@ -117,3 +118,10 @@ function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
     </button>
   </section>
 </template>
+
+<style scoped>
+.sandbox-tag {
+  color: var(--warn, #d9a441);
+  border-color: var(--warn, #d9a441);
+}
+</style>

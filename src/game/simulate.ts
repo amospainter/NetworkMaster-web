@@ -1,8 +1,18 @@
 import type { Device, GameState, Packet, Scenario } from '../types'
 import {
+  DDOS_DURATION_TICKS,
+  DDOS_RATE,
   DEVICE_RULES,
   FORWARDING_KINDS,
+  HISTORY_SAMPLE_CAP,
+  HONEYPOT_ABSORB_SCORE,
+  HONEYPOT_LURE_CHANCE,
+  HOSTILE_EVENT_GRACE_WINDOWS,
   MILESTONES,
+  OUTAGE_DURATION_TICKS,
+  OUTAGE_RADIUS,
+  PEAK_AMPLITUDE,
+  PEAK_PERIOD_TICKS,
   PRIORITY_WEIGHT,
   QUEUE_CAPACITY_TICKS,
   SCENARIOS,
@@ -13,7 +23,7 @@ import {
 import { createDevice } from './factories'
 import { networkHealthBonus } from './persistence'
 import { findRoute, findRouteThrough, independentPathCount, pickCrossSubnetDest } from './routing'
-import { addEvent, cloneState, createId, distanceBetween } from './utils'
+import { addEvent, chance, cloneState, createId, distanceBetween } from './utils'
 import { buildWirelessAssociations, deviceCapacity, hubRange } from './wireless'
 
 /**
@@ -29,6 +39,20 @@ function warmupFactor(tick: number, scenario: Scenario): number {
   if (tick >= scenario.warmupTicks) return 1
   const progress = tick / scenario.warmupTicks
   return scenario.warmupFloor + (1 - scenario.warmupFloor) * progress
+}
+
+/**
+ * A slow sine wave layered on top of warmup/ramp demand, simulating a daily
+ * peak/quiet rhythm. Starts at 1 and rises first, so the opening minutes stay
+ * governed by warmup rather than immediately swinging low.
+ *
+ * @param tick - Current simulation tick.
+ * @param scenario - Active scenario; `peakAmplitude` overrides the global default.
+ * @returns Demand multiplier centered on 1.
+ */
+function peakFactor(tick: number, scenario: Scenario): number {
+  const amplitude = scenario.peakAmplitude ?? PEAK_AMPLITUDE
+  return 1 + amplitude * Math.sin((2 * Math.PI * tick) / PEAK_PERIOD_TICKS)
 }
 
 /**
@@ -70,6 +94,30 @@ function packet(source: Device, path: string[], tick: number, owner: Device = so
 }
 
 /**
+ * Creates a one-way DDoS junk packet from the Cloud Edge toward its attack
+ * target. Unlike real traffic, junk has no return-trip response packet.
+ *
+ * @param source - Attack origin (the Cloud Edge).
+ * @param path - Precomputed device-id route toward the target or a lured honeypot.
+ * @param tick - Generation tick.
+ * @returns A new junk packet positioned at the start of its route.
+ */
+function junkPacket(source: Device, path: string[], tick: number): Packet {
+  return {
+    id: createId(),
+    path,
+    hop: 0,
+    progress: 0,
+    priority: 'bulk',
+    owner: source.id,
+    source: source.id,
+    generatedTick: tick,
+    queuedTicks: 0,
+    junk: true,
+  }
+}
+
+/**
  * Adds the next end-user device in the configured spawn rotation.
  *
  * @param s - Mutable simulation draft.
@@ -98,20 +146,81 @@ function spawnDevice(s: GameState) {
 /**
  * Rolls a single challenge event, mirroring the native `rollChallengeEvent`
  * weighting. Equipment-failure events only fire in scenarios that enable
- * equipment failure; the others can occur in any scenario.
+ * equipment failure; the others can occur in any scenario. DDoS and power
+ * outage additionally require the scenario's first `HOSTILE_EVENT_GRACE_WINDOWS`
+ * roll windows to have already passed, so a run always gets a settling-in
+ * period before hostile events can appear.
  *
  * @param state - Mutable simulation draft.
  * @param scenario - Active scenario configuration.
  * @returns Nothing; any selected event is applied to the draft.
  */
 function rollChallengeEvent(state: GameState, scenario: Scenario) {
-  const roll = Math.random() * 100
-  let kind: 'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure'
-  if (roll < 35) kind = 'trafficSpike'
-  else if (roll < 70) kind = scenario.equipmentFailure ? 'equipmentFailure' : 'budgetBonus'
-  else if (roll < 90) kind = 'budgetBonus'
-  else kind = 'deviceSurge'
+  const priorRollCount = state.challengeRollCount
+  state.challengeRollCount++
+  const hostileEventsEligible =
+    scenario.equipmentFailure && priorRollCount >= HOSTILE_EVENT_GRACE_WINDOWS
 
+  const roll = Math.random() * 100
+  let kind:
+    'trafficSpike' | 'budgetBonus' | 'deviceSurge' | 'equipmentFailure' | 'ddos' | 'powerOutage'
+  if (hostileEventsEligible) {
+    if (roll < 25) kind = 'trafficSpike'
+    else if (roll < 40) kind = 'ddos'
+    else if (roll < 50) kind = 'powerOutage'
+    else if (roll < 75) kind = 'equipmentFailure'
+    else if (roll < 90) kind = 'budgetBonus'
+    else kind = 'deviceSurge'
+  } else {
+    if (roll < 35) kind = 'trafficSpike'
+    else if (roll < 70) kind = scenario.equipmentFailure ? 'equipmentFailure' : 'budgetBonus'
+    else if (roll < 90) kind = 'budgetBonus'
+    else kind = 'deviceSurge'
+  }
+
+  if (kind === 'ddos') {
+    const candidates = state.devices.filter((device) => device.kind === 'switch' && !device.offline)
+    if (!candidates.length) return
+    const target = candidates[Math.floor(Math.random() * candidates.length)]
+    state.activeEvents.push({
+      id: createId(),
+      kind: 'ddos',
+      ticksRemaining: DDOS_DURATION_TICKS,
+      targetId: target.id,
+    })
+    addEvent(
+      state,
+      `DDoS attack detected — junk traffic is flooding ${target.label}'s subnet for ${DDOS_DURATION_TICKS} ticks.`,
+    )
+    return
+  }
+  if (kind === 'powerOutage') {
+    const centerX = 15 + Math.random() * 70
+    const centerY = 15 + Math.random() * 70
+    const affected = state.devices.filter(
+      (device) =>
+        device.kind !== 'cloud' &&
+        !device.ups &&
+        !device.offline &&
+        distanceBetween(device, { x: centerX, y: centerY } as Device) <= OUTAGE_RADIUS,
+    )
+    if (!affected.length) return
+    affected.forEach((device) => (device.offline = true))
+    state.activeEvents.push({
+      id: createId(),
+      kind: 'powerOutage',
+      ticksRemaining: OUTAGE_DURATION_TICKS,
+      targetId: null,
+      affectedIds: affected.map((device) => device.id),
+      centerX,
+      centerY,
+    })
+    addEvent(
+      state,
+      `Power outage! ${affected.length} device${affected.length === 1 ? '' : 's'} offline for ${OUTAGE_DURATION_TICKS} ticks.`,
+    )
+    return
+  }
   if (kind === 'trafficSpike') {
     // Weight selection inversely by packet rate so high-demand devices (TV,
     // tablet) are less likely to be spiked, matching the native bias.
@@ -182,9 +291,26 @@ function rollChallengeEvent(state: GameState, scenario: Scenario) {
 function tickActiveEvents(state: GameState) {
   for (const event of state.activeEvents) {
     event.ticksRemaining--
-    if (event.ticksRemaining <= 0 && event.kind === 'trafficSpike') {
+    if (event.ticksRemaining > 0) continue
+    if (event.kind === 'trafficSpike') {
       const target = state.devices.find((device) => device.id === event.targetId)
       addEvent(state, `Traffic spike on ${target?.label ?? 'device'} subsided.`)
+    } else if (event.kind === 'ddos') {
+      const target = state.devices.find((device) => device.id === event.targetId)
+      addEvent(state, `DDoS attack against ${target?.label ?? 'the subnet'} subsided.`)
+    } else if (event.kind === 'powerOutage') {
+      // Only restore devices this event actually downed and that haven't
+      // separately failed since (health 0 from equipment failure stays down).
+      const restored = (event.affectedIds ?? []).filter((id) => {
+        const device = state.devices.find((candidate) => candidate.id === id)
+        if (!device || device.health <= 0) return false
+        device.offline = false
+        return true
+      })
+      addEvent(
+        state,
+        `Power restored to ${restored.length} device${restored.length === 1 ? '' : 's'}.`,
+      )
     }
   }
   state.activeEvents = state.activeEvents.filter((event) => event.ticksRemaining > 0)
@@ -302,12 +428,16 @@ export function simulate(state: GameState): GameState {
         const owner = nextState.devices.find(
           (device) => device.id === (arrivingPacket.owner ?? arrivingPacket.source),
         )
-        if (owner && arrivingDevice.firewallRules.includes(owner.kind)) {
+        // Junk (DDoS) traffic is always dropped at any firewall, regardless
+        // of that firewall's configured block rules — a firewall positioned
+        // between the router and an attack's target subnet absorbs it, at
+        // the cost of its own PPS admission budget.
+        if (arrivingPacket.junk || (owner && arrivingDevice.firewallRules.includes(owner.kind))) {
           arrivingPacket.progress = 0
           arrivingPacket.hop++
           arrivingPacket.droppingAtFirewall = true
           firewallDropPackets.push(arrivingPacket)
-          packetsDroppedThisTick++
+          if (!arrivingPacket.junk) packetsDroppedThisTick++
         } else allowedArrivals.push(arrivingPacket)
       }
       eligibleArrivals = allowedArrivals
@@ -325,8 +455,9 @@ export function simulate(state: GameState): GameState {
     const overflow = ordered.slice(capacity)
     for (const overflowPacket of overflow) {
       overflowPacket.queuedTicks++
-      if (overflowPacket.queuedTicks > QUEUE_CAPACITY_TICKS) packetsDroppedThisTick++
-      else requeuedPackets.push(overflowPacket)
+      if (overflowPacket.queuedTicks > QUEUE_CAPACITY_TICKS) {
+        if (!overflowPacket.junk) packetsDroppedThisTick++
+      } else requeuedPackets.push(overflowPacket)
     }
     if (overflow.length > 0) {
       arrivingDevice.wear++
@@ -357,7 +488,8 @@ export function simulate(state: GameState): GameState {
     (activePacket) => activePacket.hop < activePacket.path.length - 1,
   )
   nextState.packets = inFlightPackets
-  nextState.delivered += deliveredPackets.length
+  // Junk arrivals never count toward the player-facing delivered total.
+  nextState.delivered += deliveredPackets.filter((deliveredPacket) => !deliveredPacket.junk).length
 
   // Wireless association only depends on device position/status, which is
   // fixed for the remainder of this tick (newly spawned devices don't
@@ -366,6 +498,16 @@ export function simulate(state: GameState): GameState {
   const wirelessAssociations = buildWirelessAssociations(nextState)
   const redundancyMemo = new Map<string, number>()
   for (const deliveredPacket of deliveredPackets) {
+    if (deliveredPacket.junk) {
+      // Junk never scores, doesn't touch owner/latency telemetry, and only
+      // pays out when a honeypot lured it in — landing on its actual attack
+      // target is exactly the harm it's meant to do, not a reward.
+      const destination = nextState.devices.find(
+        (device) => device.id === deliveredPacket.path.at(-1),
+      )
+      if (destination?.kind === 'honeypot') nextState.score += HONEYPOT_ABSORB_SCORE
+      continue
+    }
     const ownerDevice = nextState.devices.find(
       (device) => device.id === (deliveredPacket.owner ?? deliveredPacket.source),
     )
@@ -396,6 +538,7 @@ export function simulate(state: GameState): GameState {
         : nextState.recentQueueDelayTicks * 0.75 + deliveredPacket.queuedTicks * 0.25
   }
 
+  const junkLoadByCable = new Map<string, number>()
   for (const activePacket of inFlightPackets) {
     const currentDeviceId = activePacket.path[activePacket.hop]
     const nextDeviceId = activePacket.path[activePacket.hop + 1]
@@ -404,7 +547,11 @@ export function simulate(state: GameState): GameState {
         (networkCable.from === currentDeviceId && networkCable.to === nextDeviceId) ||
         (networkCable.to === currentDeviceId && networkCable.from === nextDeviceId),
     )
-    if (activeCable) activeCable.load++
+    if (activeCable) {
+      activeCable.load++
+      if (activePacket.junk)
+        junkLoadByCable.set(activeCable.id, (junkLoadByCable.get(activeCable.id) ?? 0) + 1)
+    }
   }
 
   const cloud = nextState.devices.find((device) => device.kind === 'cloud')!
@@ -416,6 +563,7 @@ export function simulate(state: GameState): GameState {
       DEVICE_RULES[sourceDevice.kind].rate *
       nextState.rate *
       warmup *
+      peakFactor(nextState.tick, scenarioConfig) *
       trafficSpikeMultiplier(nextState, sourceDevice.id)
     const packetAttempts =
       Math.floor(requestedTraffic) + (Math.random() < requestedTraffic % 1 ? 1 : 0)
@@ -467,11 +615,52 @@ export function simulate(state: GameState): GameState {
     }
   }
 
+  // DDoS junk traffic: emitted every tick an attack is active, independent of
+  // the normal per-source traffic loop above (the Cloud Edge is the source,
+  // not a player device). A lured packet's route is recomputed once per
+  // packet since honeypot reachability can differ per candidate.
+  for (const activeDdos of nextState.activeEvents) {
+    if (activeDdos.kind !== 'ddos') continue
+    const targetSwitch = nextState.devices.find((device) => device.id === activeDdos.targetId)
+    if (!targetSwitch || targetSwitch.offline) continue
+    for (let junkIndex = 0; junkIndex < DDOS_RATE; junkIndex++) {
+      let route: string[] | null = null
+      if (chance(HONEYPOT_LURE_CHANCE)) {
+        const honeypots = nextState.devices.filter(
+          (device) => device.kind === 'honeypot' && !device.offline,
+        )
+        let shortestHoneypotRoute: string[] | null = null
+        for (const honeypot of honeypots) {
+          const honeypotRoute = findRoute(nextState, cloud.id, honeypot.id, wirelessAssociations)
+          if (
+            honeypotRoute &&
+            (!shortestHoneypotRoute || honeypotRoute.length < shortestHoneypotRoute.length)
+          )
+            shortestHoneypotRoute = honeypotRoute
+        }
+        route = shortestHoneypotRoute
+      }
+      if (!route) route = findRoute(nextState, cloud.id, targetSwitch.id, wirelessAssociations)
+      // No route at all (neither honeypot nor target reachable) simply means
+      // the junk packet never materializes — junk drops never count anyway.
+      if (route) nextState.packets.push(junkPacket(cloud, route, nextState.tick))
+    }
+  }
+
   for (const networkCable of nextState.cables) {
     if (!networkCable.load) continue
     networkCable.status = networkCable.load > networkCable.capacity ? 'congested' : 'active'
     if (networkCable.status === 'congested') {
-      packetsDroppedThisTick += Math.max(0, networkCable.load - networkCable.capacity)
+      // Junk still congests the link (that's the displacement damage a DDoS
+      // does to real traffic sharing it), but this aggregate loss estimate
+      // can't tell which specific packets were dropped — so junk's own share
+      // of the loss, proportional to its share of this cable's load, is
+      // excluded from the real drop/failure-pressure count.
+      const totalExcess = Math.max(0, networkCable.load - networkCable.capacity)
+      const junkOnCable = junkLoadByCable.get(networkCable.id) ?? 0
+      const junkShare =
+        networkCable.load > 0 ? Math.round(totalExcess * (junkOnCable / networkCable.load)) : 0
+      packetsDroppedThisTick += Math.max(0, totalExcess - junkShare)
     }
   }
 
@@ -531,6 +720,7 @@ export function simulate(state: GameState): GameState {
   tickWirelessInterference(nextState)
 
   const shouldEndRun =
+    nextState.mode !== 'sandbox' &&
     !nextState.unscored &&
     nextState.tick >= scenarioConfig.gameOverCheck &&
     nextState.recentDrops.length === 20 &&
@@ -545,5 +735,29 @@ export function simulate(state: GameState): GameState {
     )
   }
   nextState.events = nextState.events.slice(0, 6)
+  recordHistorySample(nextState)
   return nextState
+}
+
+/**
+ * Appends one telemetry sample per stride to `GameState.history`, halving the
+ * sample set and doubling the stride once the cap is reached. This keeps a
+ * long run's full shape visible at decreasing resolution instead of losing
+ * its opening ticks to a hard cutoff.
+ *
+ * @param state - Mutable simulation draft.
+ * @returns Nothing; `history`/`historyStride` are updated in place.
+ */
+function recordHistorySample(state: GameState) {
+  if (state.tick % state.historyStride !== 0) return
+  state.history.push({
+    t: state.tick,
+    s: state.score,
+    f: Math.round(state.failure),
+    l: Math.round(state.recentLatencyTicks * 10) / 10,
+  })
+  if (state.history.length > HISTORY_SAMPLE_CAP) {
+    state.history = state.history.filter((_, index) => index % 2 === 0)
+    state.historyStride *= 2
+  }
 }

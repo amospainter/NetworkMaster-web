@@ -157,6 +157,13 @@
 <td>Highest base throughput; +10 pkt-tick upgrade only (no port upgrade)</td>
 </tr>
 <tr>
+<td>Honeypot</td>
+<td>$70</td>
+<td>1</td>
+<td>10</td>
+<td>Inert until a DDoS attack starts; see §9</td>
+</tr>
+<tr>
 <td>Cloud Edge</td>
 <td>—</td>
 <td>2</td>
@@ -179,6 +186,8 @@
 <p>equally-short paths onward to a packet's destination — for example two separate routers, each with their own cable to the Cloud Edge — outbound traffic spreads across those paths over time instead of every packet taking the same one. A shorter path is still always preferred; balancing only kicks in between paths of equal length.</p>
 <li><strong>Equipment wear and failure</strong> (equipment-failure scenarios only, §8):</li>
 <p>overloaded devices accrue wear. Past 20 wear, health starts dropping; health hitting 0 takes the device offline. An offline device blinks between its normal icon and an unplugged-cable icon on the canvas so it's easy to spot, and is excluded from routing entirely. <strong>Field repair</strong> costs $40, restores health to 100%, and brings it back online — but accumulated wear is <em>not</em> reset, so a repaired device fails faster next time unless you also upgrade or replace it.</p>
+<li><strong>UPS ($45)</strong> is available on router, switch, wireless, firewall, load</li>
+<p>balancer, server, and honeypot from that device's inspector. It makes the device immune to power-outage events (see §9); it has no effect on equipment-failure wear/health.</p>
 </ul>
 <h2 id="4-wi-fi">4. Wi-Fi</h2>
 <ul>
@@ -360,6 +369,7 @@
 <p>milestones, and evaluate game over.</p>
 </ol>
 <p>Traffic doesn't start at full intensity — each scenario <strong>eases demand in</strong> from a starting floor fraction up to 100% over its <code>warmupTicks</code>, so you have a quiet opening window to build. After <code>rampStart</code>, the traffic rate climbs 4% every 90 ticks, capping at 2.25× the base rate.</p>
+<p>On top of warmup and ramp, demand also follows a slow <strong>peak-hours</strong> cycle — a gentle sine wave swinging between roughly 75% and 125% of expected traffic every 240 ticks (about 3.2 minutes at 1× speed). It doesn't kick in until after warmup ends, so it never disrupts your opening build window; once running, expect a soft climb toward a daily peak and back down again. Jackie calls out when demand is climbing toward a peak.</p>
 <p><strong>Challenge events</strong> roll every 90 ticks once a scenario's <code>challengeStart</code> tick is reached:</p>
 <ul>
 <li><strong>Traffic spike</strong> (35% chance) — doubles one device's demand for 10 ticks.</li>
@@ -371,8 +381,16 @@
 <li><strong>Device surge</strong> (remaining ~10% chance) — spawns two new source devices</li>
 <p>at once.</p>
 </ul>
+<p>Equipment-failure scenarios additionally unlock two hostile events, but only after the scenario's first two challenge-event windows have already passed (every run gets a settling-in period first):</p>
+<ul>
+<li><strong>DDoS attack</strong> — the Cloud Edge floods a random switch's subnet with junk</li>
+<p>traffic for 12 ticks. Junk consumes real cable and forwarding capacity (it can congest a link and displace your real traffic), but the junk itself never scores and its own drops never count against you — the threat is purely the congestion it causes. Any firewall the junk passes through drops it automatically, at the cost of that firewall's own throughput budget for the packets it processes. A <strong>Honeypot</strong> (§3) lures a share of the junk toward itself instead and absorbs it for a small score bonus.</p>
+<li><strong>Power outage</strong> — a random zone of the map (shown as a dashed red ring)</li>
+<p>knocks every device inside it offline for 8 ticks, except the Cloud Edge and any device with a <strong>UPS</strong> installed (§3). Devices restore automatically once the outage ends, unless they've separately failed for another reason in the meantime.</p>
+</ul>
 <p>New source devices also spawn automatically once <code>spawnStart</code> is reached, every 150 ticks, cycling PC → Phone → Console → Tablet → TV, up to 20 total devices on the canvas.</p>
 <p><strong>Game over</strong> triggers once you're past the scenario's <code>gameOverCheck</code> tick <em>and</em> the rolling 20-tick drop window exceeds 30 total drops. Failure pressure (shown in the HUD) is exactly that ratio: <code>(drops in the last 20 ticks ÷ 30) × 100%</code>. At game over you can <strong>Try again</strong>, or <strong>Continue unscored</strong> — the run keeps going (failure pressure resets) but stops paying into the leaderboard and no further game-over check occurs.</p>
+<p><strong>Sandbox mode</strong> (a checkbox on the main menu, next to Start new run) skips budget gating and game over entirely for the whole run: purchases always succeed (spend still deducts from your budget, floored at $0, so the number stays meaningful) and failure pressure can climb to 100% without ending anything. It's meant for free-form topology experimentation. A sandbox run never records a leaderboard entry or personal best, and the HUD shows a persistent <strong>SANDBOX · UNSCORED</strong> tag so it's never mistaken for a real run.</p>
 <h3 id="the-twelve-scenarios">The twelve scenarios</h3>
 <p>Listed easiest to hardest (the menu is ordered the same way):</p>
 <div class="table-wrap"><table><thead><tr>
@@ -474,7 +492,7 @@
 <li><strong>Score / multiplier</strong>, <strong>Delivered</strong>, <strong>Dropped</strong>, <strong>Combo</strong>, <strong>Budget</strong>,</li>
 <p>and <strong>Failure pressure</strong> (with a live bar) sit across the top.</p>
 <li><strong>Run Stats</strong> (footer button) adds delivered/dropped totals, clean combo,</li>
-<p>the rolling drop window, traffic ramp, and the two telemetry averages: <strong>average delivery latency</strong> (ticks from generation to arrival) and <strong>average queue delay</strong> (ticks spent waiting in a forwarding device's queue) — both rolling averages weighted 75% history / 25% latest tick.</p>
+<p>the rolling drop window, traffic ramp, and the two telemetry averages: <strong>average delivery latency</strong> (ticks from generation to arrival) and <strong>average queue delay</strong> (ticks spent waiting in a forwarding device's queue) — both rolling averages weighted 75% history / 25% latest tick. It also includes a <strong>run history chart</strong>: score, failure pressure, and latency plotted across the whole run so far. The same chart appears on the game-over screen once a run ends.</p>
 <li><strong>Device inspector</strong> shows status, ports, health/wear, throughput (with a</li>
 <p>live load bar for forwarding devices), delivered/generated, Wi-Fi link status, independent-path count, and — for wireless — current Wi-Fi generation and interference state.</p>
 <li><strong>Cable inspector</strong> shows tier, live traffic, status, age, style, and VLAN,</li>

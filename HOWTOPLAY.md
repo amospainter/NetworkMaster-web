@@ -82,6 +82,7 @@ to survive and score as long as possible against ever-increasing traffic.
 | Firewall      | $110 | 4           | 12                            | Can block multiple selected device kinds                             |
 | Server        | $120 | 2           | Unlimited                     | A cross-subnet traffic destination                                   |
 | Load Balancer | $150 | 4           | 24                            | Highest base throughput; +10 pkt-tick upgrade only (no port upgrade) |
+| Honeypot      | $70  | 1           | 10                            | Inert until a DDoS attack starts; see §9                             |
 | Cloud Edge    | —    | 2           | Unlimited                     | Fixed, present from the start                                        |
 
 - **Only the router may connect to the Cloud Edge.** Every packet's final
@@ -114,6 +115,10 @@ to survive and score as long as possible against ever-increasing traffic.
   $40, restores health to 100%, and brings it back online — but accumulated
   wear is _not_ reset, so a repaired device fails faster next time unless you
   also upgrade or replace it.
+- **UPS ($45)** is available on router, switch, wireless, firewall, load
+  balancer, server, and honeypot from that device's inspector. It makes the
+  device immune to power-outage events (see §9); it has no effect on
+  equipment-failure wear/health.
 
 ## 4. Wi-Fi
 
@@ -258,6 +263,13 @@ from a starting floor fraction up to 100% over its `warmupTicks`, so you have
 a quiet opening window to build. After `rampStart`, the traffic rate climbs
 4% every 90 ticks, capping at 2.25× the base rate.
 
+On top of warmup and ramp, demand also follows a slow **peak-hours** cycle —
+a gentle sine wave swinging between roughly 75% and 125% of expected traffic
+every 240 ticks (about 3.2 minutes at 1× speed). It doesn't kick in until
+after warmup ends, so it never disrupts your opening build window; once
+running, expect a soft climb toward a daily peak and back down again. Jackie
+calls out when demand is climbing toward a peak.
+
 **Challenge events** roll every 90 ticks once a scenario's `challengeStart`
 tick is reached:
 
@@ -271,6 +283,24 @@ tick is reached:
 - **Device surge** (remaining ~10% chance) — spawns two new source devices
   at once.
 
+Equipment-failure scenarios additionally unlock two hostile events, but only
+after the scenario's first two challenge-event windows have already passed
+(every run gets a settling-in period first):
+
+- **DDoS attack** — the Cloud Edge floods a random switch's subnet with junk
+  traffic for 12 ticks. Junk consumes real cable and forwarding capacity (it
+  can congest a link and displace your real traffic), but the junk itself
+  never scores and its own drops never count against you — the threat is
+  purely the congestion it causes. Any firewall the junk passes through drops
+  it automatically, at the cost of that firewall's own throughput budget for
+  the packets it processes. A **Honeypot** (§3) lures a share of the junk
+  toward itself instead and absorbs it for a small score bonus.
+- **Power outage** — a random zone of the map (shown as a dashed red ring)
+  knocks every device inside it offline for 8 ticks, except the Cloud Edge
+  and any device with a **UPS** installed (§3). Devices restore automatically
+  once the outage ends, unless they've separately failed for another reason
+  in the meantime.
+
 New source devices also spawn automatically once `spawnStart` is reached,
 every 150 ticks, cycling PC → Phone → Console → Tablet → TV, up to 20 total
 devices on the canvas.
@@ -281,6 +311,14 @@ pressure (shown in the HUD) is exactly that ratio: `(drops in the last 20
 ticks ÷ 30) × 100%`. At game over you can **Try again**, or **Continue
 unscored** — the run keeps going (failure pressure resets) but stops paying
 into the leaderboard and no further game-over check occurs.
+
+**Sandbox mode** (a checkbox on the main menu, next to Start new run) skips
+budget gating and game over entirely for the whole run: purchases always
+succeed (spend still deducts from your budget, floored at $0, so the number
+stays meaningful) and failure pressure can climb to 100% without ending
+anything. It's meant for free-form topology experimentation. A sandbox run
+never records a leaderboard entry or personal best, and the HUD shows a
+persistent **SANDBOX · UNSCORED** tag so it's never mistaken for a real run.
 
 ### The twelve scenarios
 
@@ -325,7 +363,10 @@ just the first — it's scenario context, not a one-time tutorial.
   the rolling drop window, traffic ramp, and the two telemetry averages:
   **average delivery latency** (ticks from generation to arrival) and
   **average queue delay** (ticks spent waiting in a forwarding device's
-  queue) — both rolling averages weighted 75% history / 25% latest tick.
+  queue) — both rolling averages weighted 75% history / 25% latest tick. It
+  also includes a **run history chart**: score, failure pressure, and
+  latency plotted across the whole run so far. The same chart appears on the
+  game-over screen once a run ends.
 - **Device inspector** shows status, ports, health/wear, throughput (with a
   live load bar for forwarding devices), delivered/generated, Wi-Fi link
   status, independent-path count, and — for wireless — current Wi-Fi

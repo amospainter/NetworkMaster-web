@@ -70,7 +70,7 @@ const renderedPackets = computed(() =>
     v-for="{ packet, pos } in renderedPackets"
     :key="packet.id"
     class="packet"
-    :class="[packet.priority, { 'firewall-drop': packet.droppingAtFirewall }]"
+    :class="[packet.priority, { 'firewall-drop': packet.droppingAtFirewall, junk: packet.junk }]"
     :style="{ left: pos.x + '%', top: pos.y + '%' }"
   />
 </template>

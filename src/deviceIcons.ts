@@ -1,6 +1,7 @@
 import {
   Cloud,
   Gamepad2,
+  Magnet,
   Monitor,
   Network,
   Radio,
@@ -28,6 +29,7 @@ export const deviceIcons = {
   firewall: Shield,
   wireless: Wifi,
   loadBalancer: Scale,
+  honeypot: Magnet,
 }
 
 /** Buildable equipment kinds, their button label, base cost, and gameplay purpose. */
@@ -67,5 +69,11 @@ export const BUILD_OPTIONS: [DeviceKind, string, number, string][] = [
     'Load Balancer',
     150,
     'Distributes traffic across available paths. Use it to prevent overload and improve reliability.',
+  ],
+  [
+    'honeypot',
+    'Honeypot',
+    70,
+    'Lures and absorbs DDoS junk traffic away from your real devices during an attack. Inert otherwise.',
   ],
 ]

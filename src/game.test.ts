@@ -21,6 +21,7 @@ import {
   upgradeAllCables,
   upgradeCable,
   upgradeDeviceSpeed,
+  upgradeUps,
   upgradeWifi,
 } from './game'
 import type { GameState } from './types'
@@ -29,7 +30,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(9)
+      expect(game.version).toBe(11)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -354,9 +355,9 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.events[0].text).toContain('$117 salvage')
   })
 
-  it('initializes the version 9 schema with empty progression state', () => {
+  it('initializes the version 11 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(9)
+    expect(game.version).toBe(11)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
     expect(game.devices.every((device) => device.interference === 0)).toBe(true)
@@ -381,7 +382,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
@@ -396,7 +397,7 @@ describe('NetworkMaster gameplay rules', () => {
     } & Partial<Omit<GameState, 'version' | 'devices'>>
     v3.devices.forEach((device) => delete device.interference)
     const migrated = migrateSavedGame(v3 as unknown as { version: number })
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
   })
 
@@ -407,7 +408,7 @@ describe('NetworkMaster gameplay rules', () => {
       packets: [{ id: 'p1' }],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v4)
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.packets).toEqual([])
   })
 
@@ -422,7 +423,7 @@ describe('NetworkMaster gameplay rules', () => {
       }),
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v5)
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
   })
 
@@ -433,7 +434,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v6.recentLatencyTicks
     delete v6.recentQueueDelayTicks
     const migrated = migrateSavedGame(v6 as unknown as { version: number })
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.recentLatencyTicks).toBe(0)
     expect(migrated?.recentQueueDelayTicks).toBe(0)
   })
@@ -446,10 +447,38 @@ describe('NetworkMaster gameplay rules', () => {
       events: ['Run initialized. Connect clients to bring them online.'],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v7)
-    expect(migrated?.version).toBe(9)
+    expect(migrated?.version).toBe(11)
     expect(migrated?.events).toEqual([
       { tick: 42, text: 'Run initialized. Connect clients to bring them online.' },
     ])
+  })
+
+  it('migrates a version 9 save by backfilling sandbox mode and run history', () => {
+    const v9 = { ...newGame('home'), version: 9 } as unknown as { version: number } & Partial<
+      Omit<GameState, 'version'>
+    >
+    delete v9.mode
+    delete v9.history
+    delete v9.historyStride
+    const migrated = migrateSavedGame(v9 as unknown as { version: number })
+    expect(migrated?.version).toBe(11)
+    expect(migrated?.mode).toBe('normal')
+    expect(migrated?.history).toEqual([])
+    expect(migrated?.historyStride).toBe(1)
+  })
+
+  it('migrates a version 10 save by backfilling UPS state and the challenge-roll counter', () => {
+    const v10 = { ...newGame('home'), version: 10 } as unknown as { version: number } & Partial<
+      Omit<GameState, 'version'>
+    >
+    v10.devices!.forEach((device) => delete (device as Partial<typeof device>).ups)
+    delete v10.challengeRollCount
+    v10.packets = [{ id: 'p1' }] as unknown as GameState['packets']
+    const migrated = migrateSavedGame(v10 as unknown as { version: number })
+    expect(migrated?.version).toBe(11)
+    expect(migrated?.devices.every((device) => device.ups === false)).toBe(true)
+    expect(migrated?.challengeRollCount).toBe(0)
+    expect(migrated?.packets).toEqual([])
   })
 
   it('stamps each event with the tick it happened on, not its position in the list', () => {
@@ -716,37 +745,46 @@ describe('NetworkMaster gameplay rules', () => {
   })
 
   it('keeps a rejected packet at the firewall for one drop-animation interval', () => {
-    let game = newGame('home')
-    game.budget = 500
-    game = buildDevice(game, 'firewall')
-    const pc = game.devices.find((device) => device.kind === 'pc')!
-    const firewall = game.devices.find((device) => device.kind === 'firewall')!
-    const router = game.devices.find((device) => device.kind === 'router')!
-    const cloud = game.devices.find((device) => device.kind === 'cloud')!
-    game = toggleFirewallRule(game, firewall.id, 'pc')
-    game.packets = [
-      {
-        id: 'blocked-at-firewall',
-        path: [pc.id, firewall.id, router.id, cloud.id],
-        hop: 0,
-        progress: 0.9,
-        priority: 'bulk',
-        owner: pc.id,
-        source: pc.id,
-        generatedTick: game.tick,
-        queuedTicks: 0,
-      },
-    ]
+    // Other unconnected source devices (tv, console, etc.) also generate and
+    // can drop traffic each tick; every such roll in simulate() is gated by
+    // `Math.random() < chance`, so pinning Math.random() near 1 suppresses
+    // them and isolates `dropped` to the firewall-blocked packet under test.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.9999)
+    try {
+      let game = newGame('home')
+      game.budget = 500
+      game = buildDevice(game, 'firewall')
+      const pc = game.devices.find((device) => device.kind === 'pc')!
+      const firewall = game.devices.find((device) => device.kind === 'firewall')!
+      const router = game.devices.find((device) => device.kind === 'router')!
+      const cloud = game.devices.find((device) => device.kind === 'cloud')!
+      game = toggleFirewallRule(game, firewall.id, 'pc')
+      game.packets = [
+        {
+          id: 'blocked-at-firewall',
+          path: [pc.id, firewall.id, router.id, cloud.id],
+          hop: 0,
+          progress: 0.9,
+          priority: 'bulk',
+          owner: pc.id,
+          source: pc.id,
+          generatedTick: game.tick,
+          queuedTicks: 0,
+        },
+      ]
 
-    const droppedBefore = game.dropped
-    game = simulate(game)
-    const droppingPacket = game.packets.find((packet) => packet.id === 'blocked-at-firewall')
-    expect(droppingPacket?.droppingAtFirewall).toBe(true)
-    expect(droppingPacket?.hop).toBe(1)
-    expect(game.dropped).toBe(droppedBefore + 1)
+      const droppedBefore = game.dropped
+      game = simulate(game)
+      const droppingPacket = game.packets.find((packet) => packet.id === 'blocked-at-firewall')
+      expect(droppingPacket?.droppingAtFirewall).toBe(true)
+      expect(droppingPacket?.hop).toBe(1)
+      expect(game.dropped).toBe(droppedBefore + 1)
 
-    game = simulate(game)
-    expect(game.packets.some((packet) => packet.id === 'blocked-at-firewall')).toBe(false)
+      game = simulate(game)
+      expect(game.packets.some((packet) => packet.id === 'blocked-at-firewall')).toBe(false)
+    } finally {
+      randomSpy.mockRestore()
+    }
   })
 
   it('builds a load balancer as a 4-port forwarding node that bridges end devices', () => {
@@ -884,5 +922,251 @@ describe('NetworkMaster gameplay rules', () => {
     const routes = computeCableRoutes(game.devices, game.cables)
     const route = routes.get(cable.id)!
     expect(route.points).toHaveLength(2)
+  })
+
+  it('varies traffic generation with the peak-hours demand wave', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.1) // always attempt/succeed traffic rolls
+    // Both ticks sit past home's 180-tick warmup so warmup factor is pinned at
+    // 1 for both, isolating the peak wave's effect (period 240: max at tick
+    // 300, min at tick 420, since sin(2π·300/240) = 1 and sin(2π·420/240) = -1).
+    let quietTickGame = newGame('home', 'sandbox')
+    quietTickGame.budget = 500
+    quietTickGame.tick = 420
+    quietTickGame = simulate(quietTickGame)
+    const quietGenerated = quietTickGame.devices.reduce((total, d) => total + d.generated, 0)
+
+    let peakTickGame = newGame('home', 'sandbox')
+    peakTickGame.budget = 500
+    peakTickGame.tick = 300
+    peakTickGame = simulate(peakTickGame)
+    const peakGenerated = peakTickGame.devices.reduce((total, d) => total + d.generated, 0)
+
+    expect(peakGenerated).toBeGreaterThan(quietGenerated)
+    vi.restoreAllMocks()
+  })
+
+  it('lets sandbox runs build without budget and never trigger game over', () => {
+    let game = newGame('home', 'sandbox')
+    expect(game.budget).toBe(100) // scenario starting budget is unchanged
+    game = buildDevice(game, 'router') // cost 140, more than starting budget
+    expect(game.devices.some((d) => d.kind === 'router' && d.label === 'Router-2')).toBe(true)
+    expect(game.budget).toBe(0) // spend floors at zero, never rejected
+
+    game.recentDrops = new Array(20).fill(5) // would normally exceed the failure threshold
+    game.tick = 999
+    game = simulate(game)
+    expect(game.phase).toBe('playing')
+  })
+
+  it('backfills mode on a fresh normal run and keeps a sandbox flag through simulate', () => {
+    const normalGame = newGame('home')
+    expect(normalGame.mode).toBe('normal')
+    let sandboxGame = newGame('home', 'sandbox')
+    sandboxGame = simulate(sandboxGame)
+    expect(sandboxGame.mode).toBe('sandbox')
+  })
+
+  it('records a run-history sample every tick and downsamples past the cap', () => {
+    // Sandbox mode keeps the run in 'playing' regardless of drops, so history
+    // keeps accumulating past the point a normal run's unconnected devices
+    // would otherwise trip game over.
+    let game = newGame('home', 'sandbox')
+    game.budget = 500
+    game = simulate(game)
+    expect(game.history).toHaveLength(1)
+    expect(game.history[0]).toMatchObject({ t: 1 })
+
+    for (let i = 0; i < 611; i++) game = simulate(game)
+    expect(game.history.length).toBeLessThanOrEqual(600)
+    expect(game.historyStride).toBeGreaterThan(1)
+    expect(game.history[0].t).toBe(1) // opening samples are thinned, not dropped
+    // The final tick may fall between strided samples once downsampling starts.
+    expect(game.tick - game.history.at(-1)!.t).toBeLessThan(game.historyStride)
+  })
+
+  /** Removes rate>0 source devices so per-tick traffic generation can't add noise to a DDoS/outage test. */
+  function withoutSources(game: GameState): GameState {
+    return {
+      ...game,
+      devices: game.devices.filter(
+        (d) => !['pc', 'tv', 'console', 'phone', 'tablet'].includes(d.kind),
+      ),
+    }
+  }
+
+  it('junk packets are always dropped at any firewall, without counting as a drop', () => {
+    let game = withoutSources(newGame('startup'))
+    game.budget = 500
+    game = buildDevice(game, 'firewall')
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const firewall = game.devices.find((d) => d.kind === 'firewall')!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    // No firewall rule blocks 'cloud' — the drop must happen purely because the packet is junk.
+    expect(firewall.firewallRules).toEqual([])
+    game.packets = [
+      {
+        id: 'junk-at-firewall',
+        path: [router.id, firewall.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        owner: cloud.id,
+        source: cloud.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+        junk: true,
+      },
+    ]
+    const droppedBefore = game.dropped
+    game = simulate(game)
+    const droppingPacket = game.packets.find((p) => p.id === 'junk-at-firewall')
+    expect(droppingPacket?.droppingAtFirewall).toBe(true)
+    expect(droppingPacket?.hop).toBe(1)
+    expect(game.dropped).toBe(droppedBefore)
+  })
+
+  it('DDoS junk delivered to its target switch scores nothing and is not counted as delivered', () => {
+    let game = withoutSources(newGame('startup'))
+    game.budget = 500
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const targetSwitch = game.devices.find((d) => d.kind === 'switch')!
+    game.activeEvents = [
+      { id: 'ddos-test', kind: 'ddos', ticksRemaining: 99, targetId: targetSwitch.id },
+    ]
+    game.packets = [
+      {
+        id: 'junk-arriving',
+        path: [cloud.id, router.id, targetSwitch.id],
+        hop: 1,
+        progress: 0.9,
+        priority: 'bulk',
+        owner: cloud.id,
+        source: cloud.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+        junk: true,
+      },
+    ]
+    const scoreBefore = game.score
+    const deliveredBefore = game.delivered
+    const droppedBefore = game.dropped
+    game = simulate(game)
+    expect(game.packets.some((p) => p.id === 'junk-arriving')).toBe(false)
+    expect(game.score).toBe(scoreBefore)
+    expect(game.delivered).toBe(deliveredBefore)
+    expect(game.dropped).toBe(droppedBefore)
+  })
+
+  it('a reachable honeypot lures DDoS junk away from the target switch; without one, junk falls back to the target', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0) // forces the lure roll to always succeed
+    const targetSwitchId = (game: GameState) => game.devices.find((d) => d.kind === 'switch')!.id
+
+    let withHoneypot = withoutSources(newGame('startup'))
+    withHoneypot.budget = 500
+    withHoneypot = buildDevice(withHoneypot, 'honeypot', 60, 80)
+    const honeypot = withHoneypot.devices.find((d) => d.kind === 'honeypot')!
+    const router = withHoneypot.devices.find((d) => d.kind === 'router')!
+    withHoneypot = addCable(withHoneypot, honeypot.id, router.id)
+    withHoneypot.activeEvents = [
+      { id: 'ddos-test', kind: 'ddos', ticksRemaining: 99, targetId: targetSwitchId(withHoneypot) },
+    ]
+    withHoneypot = simulate(withHoneypot)
+    const luredJunk = withHoneypot.packets.filter((p) => p.junk)
+    expect(luredJunk.length).toBeGreaterThan(0)
+    expect(luredJunk.every((p) => p.path.at(-1) === honeypot.id)).toBe(true)
+
+    let withoutHoneypot = withoutSources(newGame('startup'))
+    withoutHoneypot.budget = 500
+    withoutHoneypot.activeEvents = [
+      {
+        id: 'ddos-test',
+        kind: 'ddos',
+        ticksRemaining: 99,
+        targetId: targetSwitchId(withoutHoneypot),
+      },
+    ]
+    withoutHoneypot = simulate(withoutHoneypot)
+    const fallbackJunk = withoutHoneypot.packets.filter((p) => p.junk)
+    expect(fallbackJunk.length).toBeGreaterThan(0)
+    expect(fallbackJunk.every((p) => p.path.at(-1) === targetSwitchId(withoutHoneypot))).toBe(true)
+
+    vi.restoreAllMocks()
+  })
+
+  it('junk absorbed by a honeypot pays a small score bonus', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0) // forces every lure roll to succeed
+    let game = withoutSources(newGame('startup'))
+    game.budget = 500
+    game = buildDevice(game, 'honeypot', 60, 80)
+    const honeypot = game.devices.find((d) => d.kind === 'honeypot')!
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = addCable(game, honeypot.id, router.id)
+    const targetSwitch = game.devices.find((d) => d.kind === 'switch')!
+    game.activeEvents = [
+      { id: 'ddos-test', kind: 'ddos', ticksRemaining: 99, targetId: targetSwitch.id },
+    ]
+    for (let i = 0; i < 8; i++) game = simulate(game)
+    expect(game.score).toBeGreaterThan(0)
+    vi.restoreAllMocks()
+  })
+
+  it('a power outage restores only the devices it downed, leaving separately-failed devices offline', () => {
+    let game = newGame('startup')
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const switchDevice = game.devices.find((d) => d.kind === 'switch')!
+    router.offline = true
+    switchDevice.offline = true
+    switchDevice.health = 0 // simulates an unrelated equipment failure during the outage
+    game.activeEvents = [
+      {
+        id: 'outage-test',
+        kind: 'powerOutage',
+        ticksRemaining: 1,
+        targetId: null,
+        affectedIds: [router.id, switchDevice.id],
+        centerX: 50,
+        centerY: 30,
+      },
+    ]
+    game = simulate(game)
+    expect(game.activeEvents.some((e) => e.id === 'outage-test')).toBe(false)
+    expect(game.devices.find((d) => d.id === router.id)!.offline).toBe(false)
+    expect(game.devices.find((d) => d.id === switchDevice.id)!.offline).toBe(true)
+  })
+
+  it('UPS-protected devices are excluded when a power outage rolls', () => {
+    let game = withoutSources(newGame('corporate'))
+    game.budget = 1000
+    game.challengeRollCount = 2 // past the hostile-event grace window
+    const scenario = SCENARIOS.find((s) => s.id === 'corporate')!
+    game.tick = scenario.challengeStart - 1
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const routerB = game.devices.find((d) => d.kind === 'router' && d.id !== router.id)!
+    game = upgradeUps(game, routerB.id)
+    expect(game.devices.find((d) => d.id === routerB.id)!.ups).toBe(true)
+
+    // Installed only now — newGame()/upgradeUps() consume no Math.random(),
+    // so this sequence lines up exactly with rollChallengeEvent's 3 calls.
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0.45) // kind-selection roll -> powerOutage band
+      .mockReturnValueOnce(0.5) // centerX -> 15 + 0.5*70 = 50
+      .mockReturnValueOnce(19 / 70) // centerY -> 15 + (19/70)*70 = 34
+    game = simulate(game)
+    const outageEvent = game.activeEvents.find((e) => e.kind === 'powerOutage')
+    expect(outageEvent).toBeDefined()
+    expect(outageEvent!.affectedIds).not.toContain(routerB.id)
+    expect(game.devices.find((d) => d.id === routerB.id)!.offline).toBe(false)
+    vi.restoreAllMocks()
+  })
+
+  it('DDoS and power-outage events never roll before the hostile-event grace window, even in equipment-failure scenarios', () => {
+    let game = withoutSources(newGame('corporate'))
+    game.budget = 1000
+    game.challengeRollCount = 0 // still inside the grace window
+    const scenario = SCENARIOS.find((s) => s.id === 'corporate')!
+    game.tick = scenario.challengeStart - 1
+    game = simulate(game)
+    expect(game.activeEvents.some((e) => e.kind === 'ddos' || e.kind === 'powerOutage')).toBe(false)
   })
 })

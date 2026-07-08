@@ -120,6 +120,36 @@
   color: var(--red);
 }
 
+.device .attack-badge {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.outage-zone {
+  position: absolute;
+  z-index: 0;
+  transform: translate(-50%, -50%);
+  border: 1.5px dashed var(--red);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  pointer-events: none;
+}
+
+.outage-zone span {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  color: var(--red);
+  font: 700 8px var(--font-ui);
+  white-space: nowrap;
+}
+
+.ups-active {
+  color: var(--lime) !important;
+  opacity: 1 !important;
+}
+
 .danger-action {
   color: var(--red);
 }

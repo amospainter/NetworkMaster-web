@@ -66,3 +66,37 @@ export const distanceBetween = (firstDevice: Device, secondDevice: Device) =>
  */
 export const discountedSiteCost = (fullPrice: number) =>
   Math.floor(fullPrice * (1 - SITE_UPGRADE_DISCOUNT))
+
+/**
+ * Single roll site for random gameplay events. Centralizing every probability
+ * check here means a future seeded-PRNG swap (for daily challenges/replay) is
+ * one function body, not a hunt through every module for `Math.random`.
+ *
+ * @param probability - Chance of success, from 0 through 1.
+ * @returns Whether the roll succeeded.
+ */
+export const chance = (probability: number): boolean => Math.random() < probability
+
+/**
+ * Tests whether a cost can be paid. Sandbox runs always pass so the mode can
+ * be used to freely experiment with topology without a budget constraint.
+ *
+ * @param state - Current game state.
+ * @param cost - Dollar amount required.
+ * @returns Whether the purchase should be allowed.
+ */
+export const canAfford = (state: GameState, cost: number): boolean =>
+  state.mode === 'sandbox' || state.budget >= cost
+
+/**
+ * Deducts a cost from budget, floored at zero. In sandbox mode this still
+ * lets the budget number move (so upgrade totals and salvage math stay
+ * consistent) without ever going negative or blocking a subsequent purchase.
+ *
+ * @param state - Mutable reducer draft.
+ * @param cost - Dollar amount to deduct.
+ * @returns Nothing; the draft's budget is updated in place.
+ */
+export const spendBudget = (state: GameState, cost: number) => {
+  state.budget = Math.max(0, state.budget - cost)
+}

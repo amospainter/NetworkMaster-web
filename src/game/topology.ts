@@ -1,7 +1,7 @@
 import type { CableStyle, CableTier, Device, DeviceKind, GameState } from '../types'
 import { CABLE_TIERS, costs, SALVAGE_RATE, WIRELESS_ONLY_KINDS } from './constants'
 import { createCable, createDevice } from './factories'
-import { addEvent, cloneState, event } from './utils'
+import { addEvent, canAfford, cloneState, event, spendBudget } from './utils'
 
 /**
  * Tests whether topology rules classify a device as a non-forwarding wired endpoint.
@@ -202,12 +202,12 @@ export function deviceRemovalRefund(device: Device): number {
  */
 export function buildDevice(state: GameState, kind: DeviceKind, x = 50, y = 55): GameState {
   const cost = costs[kind] ?? 999
-  if (state.budget < cost)
+  if (!canAfford(state, cost))
     return { ...state, events: [event(state, 'Insufficient budget.'), ...state.events].slice(0, 6) }
   const s = cloneState(state),
     count = s.devices.filter((d) => d.kind === kind).length + 1
   s.devices.push(createDevice(kind, `${kind[0].toUpperCase() + kind.slice(1)}-${count}`, x, y))
-  s.budget -= cost
+  spendBudget(s, cost)
   addEvent(s, `${humanizeKind(kind)} placed. Drag it into position.`)
   return s
 }

@@ -27,6 +27,7 @@ const props = defineProps<{
 }>()
 const chosen = defineModel<string>('chosen', { required: true })
 const dark = defineModel<boolean>('dark', { required: true })
+const sandbox = defineModel<boolean>('sandbox', { required: true })
 
 const emit = defineEmits<{
   start: [scenarioId: string]
@@ -111,6 +112,10 @@ const SCENARIO_ICONS: Record<string, typeof House> = {
           Continue {{ savedScenarioName }} · score {{ game.score }}
         </button>
       </div>
+      <label class="sandbox-toggle">
+        <input v-model="sandbox" type="checkbox" />
+        <span>Sandbox mode — unlimited budget, no game over, unscored</span>
+      </label>
       <div class="best">
         <span>PERSONAL BEST</span><b>{{ best.toLocaleString() }}</b
         ><button @click="emit('openLeaderboard')">Leaderboard</button>
@@ -173,3 +178,14 @@ const SCENARIO_ICONS: Record<string, typeof House> = {
     </footer>
   </div>
 </template>
+
+<style scoped>
+.sandbox-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+</style>

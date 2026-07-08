@@ -16,6 +16,7 @@ export const SCENARIOS: Scenario[] = [
     challengeStart: 180,
     warmupFloor: 0.2,
     warmupTicks: 180,
+    peakAmplitude: 0.15,
     objective:
       'Get every device online and delivering packets to the Cloud Edge before rising demand outpaces your capacity.',
     firstSteps: [
@@ -338,6 +339,7 @@ export const DEVICE_RULES: Record<
   firewall: { ports: 4, pps: 12, priority: 'bulk', rate: 0 },
   wireless: { ports: 1, pps: 4, priority: 'bulk', rate: 0 },
   loadBalancer: { ports: 4, pps: 24, priority: 'bulk', rate: 0 },
+  honeypot: { ports: 1, pps: 10, priority: 'bulk', rate: 0 },
 }
 
 /**
@@ -415,12 +417,47 @@ export const costs: Partial<Record<DeviceKind, number>> = {
   server: 120,
   firewall: 110,
   loadBalancer: 150,
+  honeypot: 70,
 }
 
 /** Fraction of eligible investment returned when equipment or links are removed. */
 export const SALVAGE_RATE = 0.9
 /** Discount applied once to the aggregate price of a site-wide upgrade. */
 export const SITE_UPGRADE_DISCOUNT = 0.15
+
+/** Length of one simulated demand cycle ("day") for the peak-hours wave, in ticks. */
+export const PEAK_PERIOD_TICKS = 240
+/** Default peak-hours demand swing; scenarios may override via `Scenario.peakAmplitude`. */
+export const PEAK_AMPLITUDE = 0.25
+/** Sample cap for `GameState.history` before the stride doubles and old samples are thinned. */
+export const HISTORY_SAMPLE_CAP = 600
+
+/** Junk packets emitted per tick from the Cloud Edge toward a DDoS event's target switch. */
+export const DDOS_RATE = 6
+/** Ticks a DDoS attack event lasts once rolled. */
+export const DDOS_DURATION_TICKS = 12
+/** Challenge-event roll windows an equipment-failure scenario must survive before DDoS/power-outage can first appear. */
+export const HOSTILE_EVENT_GRACE_WINDOWS = 2
+/** Chance a DDoS junk packet is lured toward a reachable honeypot instead of its target switch. */
+export const HONEYPOT_LURE_CHANCE = 0.65
+/** Flat score awarded per junk packet absorbed by a honeypot. */
+export const HONEYPOT_ABSORB_SCORE = 2
+/** Canvas-percent radius of a power-outage zone. */
+export const OUTAGE_RADIUS = 20
+/** Ticks a power-outage zone lasts once rolled. */
+export const OUTAGE_DURATION_TICKS = 8
+/** Per-device price of the UPS upgrade. */
+export const UPS_COST = 45
+/** Infrastructure kinds eligible to purchase a UPS (power-outage immunity). */
+export const UPS_ELIGIBLE_KINDS: DeviceKind[] = [
+  'router',
+  'switch',
+  'wireless',
+  'firewall',
+  'loadBalancer',
+  'server',
+  'honeypot',
+]
 
 /** Per-device price of one forwarding-throughput upgrade. */
 export const FORWARDING_SPEED_COSTS: Partial<Record<DeviceKind, number>> = {

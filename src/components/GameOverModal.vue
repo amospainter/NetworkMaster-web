@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RotateCcw } from 'lucide-vue-next'
 import type { GameState } from '../types'
+import RunHistoryChart from './RunHistoryChart.vue'
 
 defineProps<{
   game: GameState
@@ -31,6 +32,7 @@ const emit = defineEmits<{
           {{ game.score.toLocaleString()
           }}<small>FINAL SCORE · {{ game.tick }} TICKS · {{ game.dropped }} DROPPED</small>
         </div>
+        <RunHistoryChart v-if="game.history.length > 1" :history="game.history" />
         <button class="primary" @click="emit('tryAgain', game.scenario)">
           <RotateCcw /> Try again</button
         ><button @click="emit('continueUnscored')">Continue unscored</button

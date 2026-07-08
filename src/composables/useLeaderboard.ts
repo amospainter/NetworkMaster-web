@@ -66,7 +66,13 @@ export function useLeaderboard(game: Ref<GameState | null>) {
   watch(
     () => game.value?.phase,
     (phase, previousPhase) => {
-      if (phase !== 'gameover' || previousPhase === 'gameover' || !game.value) return
+      if (
+        phase !== 'gameover' ||
+        previousPhase === 'gameover' ||
+        !game.value ||
+        game.value.mode === 'sandbox'
+      )
+        return
       recordLeaderboardEntry(game.value)
     },
   )

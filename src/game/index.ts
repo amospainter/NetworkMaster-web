@@ -9,8 +9,12 @@ export {
   CABLE_TIERS,
   FORWARDING_SPEED_COSTS,
   FORWARDING_SPEED_GAIN,
+  OUTAGE_RADIUS,
+  PEAK_PERIOD_TICKS,
   SALVAGE_RATE,
   SCENARIOS,
+  UPS_COST,
+  UPS_ELIGIBLE_KINDS,
   WIRELESS_CAPABLE_KINDS,
 } from './constants'
 
@@ -60,5 +64,6 @@ export {
   upgradeCable,
   upgradeDevicePorts,
   upgradeDeviceSpeed,
+  upgradeUps,
   upgradeWifi,
 } from './upgrades'

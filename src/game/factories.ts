@@ -37,6 +37,7 @@ export const createDevice = (
   generated: 0,
   delivered: 0,
   interference: 0,
+  ups: false,
 })
 
 /**
