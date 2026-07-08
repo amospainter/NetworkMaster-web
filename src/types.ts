@@ -13,6 +13,8 @@ export type DeviceKind =
   | 'wireless'
   | 'loadBalancer'
   | 'honeypot'
+  | 'cache'
+  | 'repeater'
 
 /**
  * Persisted cable upgrade identifiers, ordered separately by `CABLE_TIERS`.
@@ -61,6 +63,8 @@ export type Device = {
   interference: number
   /** Ignores power-outage zones; purchasable on eligible infrastructure kinds. */
   ups: boolean
+  /** Generic per-kind upgrade counter; currently only raises a cache device's hit rate. */
+  cacheLevel: number
 }
 
 /** An undirected, capacity-limited edge in the network graph. */
@@ -129,7 +133,7 @@ export type Packet = {
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
   /** Save-schema discriminator. Increment when migrations require a new persisted shape. */
-  version: 11
+  version: 12
   phase: 'playing' | 'paused' | 'gameover'
   /** Sandbox runs skip budget gating and game over, and never write scores. */
   mode: 'normal' | 'sandbox'
@@ -172,6 +176,8 @@ export type GameState = {
   historyStride: number
   /** Number of challenge-event roll windows that have occurred; gates when hostile events (DDoS/power outage) can first appear. */
   challengeRollCount: number
+  /** Accumulated metered-income cents within the current payout window; only used by `Scenario.meteredIncome` scenarios. */
+  windowIncomeCents: number
 }
 
 /** One compact per-tick telemetry sample for the run-history chart. */
@@ -220,4 +226,6 @@ export type Scenario = {
   firstSteps: string[]
   /** Overrides the global peak-hours demand-wave amplitude for this scenario. */
   peakAmplitude?: number
+  /** Replaces the flat periodic budget allocation with a delivery-metered payout. */
+  meteredIncome?: boolean
 }

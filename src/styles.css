@@ -926,6 +926,17 @@ nav > div {
 .panel-title svg {
   width: 13px;
 }
+.build-group-title {
+  font: bold 9px var(--font-ui);
+  color: var(--ink);
+  opacity: 0.7;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 6px 0 3px;
+}
+.build-group-title:first-of-type {
+  margin-top: 0;
+}
 .build-panel button {
   width: 100%;
   padding: 9px 8px;

@@ -1,5 +1,8 @@
 import type { Device, GameState, Packet, Scenario } from '../types'
 import {
+  CACHE_HIT_CHANCE,
+  CACHE_HIT_RATE_MAX,
+  CACHE_HIT_RATE_STEP,
   DDOS_DURATION_TICKS,
   DDOS_RATE,
   DEVICE_RULES,
@@ -8,6 +11,9 @@ import {
   HONEYPOT_ABSORB_SCORE,
   HONEYPOT_LURE_CHANCE,
   HOSTILE_EVENT_GRACE_WINDOWS,
+  METERED_BASE_INCOME,
+  METERED_INCOME_CAP_MULTIPLIER,
+  METERED_RATE_CENTS,
   MILESTONES,
   OUTAGE_DURATION_TICKS,
   OUTAGE_RADIUS,
@@ -15,6 +21,7 @@ import {
   PEAK_PERIOD_TICKS,
   PRIORITY_WEIGHT,
   QUEUE_CAPACITY_TICKS,
+  REPEATER_LATENCY_PENALTY,
   SCENARIOS,
   SOURCE_SPAWN_ORDER,
   WIRELESS_CAPABLE_KINDS,
@@ -24,7 +31,12 @@ import { createDevice } from './factories'
 import { networkHealthBonus } from './persistence'
 import { findRoute, findRouteThrough, independentPathCount, pickCrossSubnetDest } from './routing'
 import { addEvent, chance, cloneState, createId, distanceBetween } from './utils'
-import { buildWirelessAssociations, deviceCapacity, hubRange } from './wireless'
+import {
+  buildWirelessAssociations,
+  deviceCapacity,
+  hubRange,
+  isServedViaRepeater,
+} from './wireless'
 
 /**
  * Eases demand in over a scenario's opening ticks so the network starts quiet
@@ -514,6 +526,11 @@ export function simulate(state: GameState): GameState {
     if (ownerDevice) ownerDevice.delivered++
     const routeSourceId = deliveredPacket.path[0]
     const destinationId = deliveredPacket.path[deliveredPacket.path.length - 1]
+    // A cache hit's destination is the cache itself rather than the Cloud
+    // Edge; incrementing its own `delivered` gives a free "hits served" stat
+    // reusing the existing per-device counter instead of a new field.
+    const destinationDevice = nextState.devices.find((device) => device.id === destinationId)
+    if (destinationDevice?.kind === 'cache') destinationDevice.delivered++
     const redundancyKey = `${routeSourceId}|${destinationId}`
     let pathCount = redundancyMemo.get(redundancyKey)
     if (pathCount === undefined) {
@@ -527,6 +544,8 @@ export function simulate(state: GameState): GameState {
     }
     const redundancyBonus = pathCount >= 2 ? 5 : 0
     nextState.score += 10 * nextState.multiplier * nextState.combo + redundancyBonus
+    if (scenarioConfig.meteredIncome)
+      nextState.windowIncomeCents += METERED_RATE_CENTS[deliveredPacket.priority]
     const latency = Math.max(0, nextState.tick - deliveredPacket.generatedTick)
     nextState.recentLatencyTicks =
       nextState.recentLatencyTicks === 0
@@ -558,6 +577,9 @@ export function simulate(state: GameState): GameState {
   const router = nextState.devices.find((device) => device.kind === 'router')!
   const warmup = warmupFactor(nextState.tick, scenarioConfig)
   const sourceDevices = nextState.devices.filter((device) => DEVICE_RULES[device.kind].rate > 0)
+  const onlineCaches = nextState.devices.filter(
+    (device) => device.kind === 'cache' && !device.offline,
+  )
   for (const sourceDevice of sourceDevices) {
     const requestedTraffic =
       DEVICE_RULES[sourceDevice.kind].rate *
@@ -567,6 +589,10 @@ export function simulate(state: GameState): GameState {
       trafficSpikeMultiplier(nextState, sourceDevice.id)
     const packetAttempts =
       Math.floor(requestedTraffic) + (Math.random() < requestedTraffic % 1 ? 1 : 0)
+    const priority = DEVICE_RULES[sourceDevice.kind].priority
+    const hubId = wirelessAssociations.get(sourceDevice.id)
+    const repeaterPenalty =
+      hubId && isServedViaRepeater(nextState, sourceDevice.id, hubId) ? REPEATER_LATENCY_PENALTY : 0
     for (let attempt = 0; attempt < packetAttempts; attempt++) {
       if (Math.random() > 0.24) continue
       // Each demand unit is a two-way exchange: the initiating request and
@@ -588,12 +614,42 @@ export function simulate(state: GameState): GameState {
           if (crossRoute) route = crossRoute
         }
       }
+      // A bulk/stream Cloud-bound exchange may instead be served by a
+      // same-subnet cache, a much shorter round trip that never touches the
+      // router/uplink. Realtime traffic and cross-subnet traffic are
+      // unaffected — this only swaps the destination while it's still cloud-bound.
+      if (route && route.at(-1) === cloud.id && priority !== 'realtime') {
+        const sameSubnetCache = onlineCaches.find((cache) => cache.subnet === sourceDevice.subnet)
+        if (sameSubnetCache) {
+          const hitChance = Math.min(
+            CACHE_HIT_RATE_MAX,
+            CACHE_HIT_CHANCE + sameSubnetCache.cacheLevel * CACHE_HIT_RATE_STEP,
+          )
+          if (chance(hitChance)) {
+            const cacheRoute = findRoute(
+              nextState,
+              sourceDevice.id,
+              sameSubnetCache.id,
+              wirelessAssociations,
+            )
+            if (cacheRoute) route = cacheRoute
+          }
+        }
+      }
       if (route) {
         const destination = nextState.devices.find((device) => device.id === route.at(-1))!
-        nextState.packets.push(
-          packet(sourceDevice, route, nextState.tick),
-          packet(destination, [...route].reverse(), nextState.tick, sourceDevice),
+        const requestPacket = packet(sourceDevice, route, nextState.tick)
+        const responsePacket = packet(
+          destination,
+          [...route].reverse(),
+          nextState.tick,
+          sourceDevice,
         )
+        if (repeaterPenalty) {
+          requestPacket.queuedTicks += repeaterPenalty
+          responsePacket.queuedTicks += repeaterPenalty
+        }
+        nextState.packets.push(requestPacket, responsePacket)
       } else {
         // If firewall policy is the only thing preventing a route, create the
         // exchange on that physical path. It will visibly terminate when it
@@ -679,9 +735,19 @@ export function simulate(state: GameState): GameState {
   }
 
   if (nextState.tick % 15 === 0) {
-    const income = 25 + 5 * nextState.multiplier
-    nextState.budget += income
-    addEvent(nextState, `Budget allocation received: +$${income}`)
+    const flatAllocation = 25 + 5 * nextState.multiplier
+    if (scenarioConfig.meteredIncome) {
+      const cap = flatAllocation * METERED_INCOME_CAP_MULTIPLIER
+      const income = Math.round(
+        Math.min(cap, METERED_BASE_INCOME + nextState.windowIncomeCents / 100),
+      )
+      nextState.budget += income
+      nextState.windowIncomeCents = 0
+      addEvent(nextState, `Metered income: +$${income}`)
+    } else {
+      nextState.budget += flatAllocation
+      addEvent(nextState, `Budget allocation received: +$${flatAllocation}`)
+    }
   }
   if (nextState.tick % 90 === 0) nextState.multiplier++
   if (nextState.tick >= scenarioConfig.rampStart && nextState.tick % 90 === 0) {

@@ -30,6 +30,10 @@ import {
   addCable,
   buildDevice,
   CABLE_TIERS,
+  CACHE_HIT_CHANCE,
+  CACHE_HIT_RATE_COST,
+  CACHE_HIT_RATE_MAX,
+  CACHE_HIT_RATE_STEP,
   cycleCableVlan,
   deleteCable,
   deviceCapacity,
@@ -45,6 +49,7 @@ import {
   PEAK_PERIOD_TICKS,
   repairDevice,
   removeDevice,
+  REPEATER_RANGE,
   rerouteCable,
   SALVAGE_RATE,
   SCENARIOS,
@@ -56,6 +61,7 @@ import {
   upgradeAllPorts,
   upgradeAllSwitchSpeed,
   upgradeCable,
+  upgradeCacheHitRate,
   upgradeDevicePorts,
   upgradeDeviceSpeed,
   upgradeUps,
@@ -182,6 +188,10 @@ const wirelessConnections = computed(() => {
 })
 /** All access points, shared by the Wi-Fi zone layer and minimap so both avoid re-filtering devices per render. */
 const wirelessHubs = computed(() => game.value?.devices.filter((d) => d.kind === 'wireless') ?? [])
+/** Online repeaters, rendered as a second, dashed coverage zone around each. */
+const onlineRepeaters = computed(
+  () => game.value?.devices.filter((d) => d.kind === 'repeater' && !d.offline) ?? [],
+)
 /** O(1) device lookup by id, shared by the minimap's per-cable endpoint resolution. */
 const deviceById = computed(() => {
   const byId = new Map<string, Device>()
@@ -221,6 +231,15 @@ function wirelessHubLabel(deviceId: string): string | null {
  */
 function wifiZoneDiameter(hub: Device): number {
   return hubRange(hub) * 2
+}
+/**
+ * Calculates a cache device's current hit chance from its upgrade level.
+ *
+ * @param cache - Cache device to inspect.
+ * @returns Hit chance from 0 through `CACHE_HIT_RATE_MAX`.
+ */
+function cacheHitRate(cache: Device): number {
+  return Math.min(CACHE_HIT_RATE_MAX, CACHE_HIT_CHANCE + cache.cacheLevel * CACHE_HIT_RATE_STEP)
 }
 /** Id of the switch currently targeted by an active DDoS event, if any. */
 const ddosTargetId = computed(
@@ -919,6 +938,19 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               }}</span>
             </div>
             <div
+              v-for="repeater in onlineRepeaters"
+              :key="'repeater-zone-' + repeater.id"
+              class="wifi-zone repeater-zone"
+              :style="{
+                left: repeater.x + '%',
+                top: repeater.y + '%',
+                width: REPEATER_RANGE * 2 + '%',
+                height: REPEATER_RANGE * 2 + '%',
+              }"
+            >
+              <span>Repeater zone</span>
+            </div>
+            <div
               v-for="outage in outageZones"
               :key="'outage-' + outage.id"
               class="outage-zone"
@@ -1145,6 +1177,12 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   >Interfered — range &amp; speed cut ({{ picked.interference }}t left)</b
                 >
               </div>
+              <div v-if="picked.kind === 'cache'" class="stat">
+                <span>Hit rate</span><b>{{ Math.round(cacheHitRate(picked) * 100) }}%</b>
+              </div>
+              <div v-if="picked.kind === 'cache'" class="stat">
+                <span>Hits served</span><b>{{ picked.delivered }}</b>
+              </div>
               <div
                 v-if="['router', 'switch', 'wireless', 'firewall'].includes(picked.kind)"
                 class="stat"
@@ -1215,6 +1253,26 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   Throughput +{{ FORWARDING_SPEED_GAIN[picked.kind] }} pkt/tick
                   <b :class="{ 'danger-text': game.budget < FORWARDING_SPEED_COSTS[picked.kind]! }"
                     >${{ FORWARDING_SPEED_COSTS[picked.kind] }}</b
+                  >
+                </button>
+              </div>
+              <div v-if="picked.kind === 'cache'" class="device-upgrades">
+                <button
+                  :disabled="
+                    cacheHitRate(picked) >= CACHE_HIT_RATE_MAX || game.budget < CACHE_HIT_RATE_COST
+                  "
+                  @click="setGame(upgradeCacheHitRate(game!, picked!.id))"
+                >
+                  Hit rate +10%
+                  <b
+                    :class="{
+                      'danger-text':
+                        cacheHitRate(picked) < CACHE_HIT_RATE_MAX &&
+                        game.budget < CACHE_HIT_RATE_COST,
+                    }"
+                    >{{
+                      cacheHitRate(picked) >= CACHE_HIT_RATE_MAX ? 'MAX' : `$${CACHE_HIT_RATE_COST}`
+                    }}</b
                   >
                 </button>
               </div>
@@ -1449,6 +1507,16 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   A UPS ($45) makes eligible infrastructure immune to power-outage events — install
                   it from that device's inspector.
                 </li>
+                <li>
+                  A <b>Cache</b> ($130) serves bulk/stream traffic on its own subnet locally instead
+                  of round-tripping to the Cloud Edge — a 35% base hit chance, upgradeable to 55%.
+                  Realtime traffic and other subnets are unaffected.
+                </li>
+                <li>
+                  A <b>Repeater</b> ($50) must sit inside a live access point's coverage; it then
+                  extends that hub's Wi-Fi zone with a second one of its own, at the cost of a small
+                  extra queue delay for clients it serves.
+                </li>
               </ol>
             </div>
             <div v-else-if="helpSection === 'Scoring & economy'">
@@ -1476,6 +1544,11 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 <li>
                   <b>Site Upgrades</b> (top bar) bulk-upgrade cable tiers, ports, or throughput
                   across the whole network for 15% less than one at a time.
+                </li>
+                <li>
+                  ISP Hub and Data Center pay <b>metered income</b> instead of a flat allocation:
+                  every 15 ticks you're paid per packet delivered in that window (realtime pays
+                  most, then stream, then bulk), capped at 3× the flat rate it replaces.
                 </li>
               </ol>
             </div>

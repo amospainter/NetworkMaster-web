@@ -7,10 +7,15 @@
 /** Scenario catalogs and shared upgrade constants consumed by the application shell. */
 export {
   CABLE_TIERS,
+  CACHE_HIT_CHANCE,
+  CACHE_HIT_RATE_COST,
+  CACHE_HIT_RATE_MAX,
+  CACHE_HIT_RATE_STEP,
   FORWARDING_SPEED_COSTS,
   FORWARDING_SPEED_GAIN,
   OUTAGE_RADIUS,
   PEAK_PERIOD_TICKS,
+  REPEATER_RANGE,
   SALVAGE_RATE,
   SCENARIOS,
   UPS_COST,
@@ -30,6 +35,7 @@ export {
   deviceCapacity,
   hubPps,
   hubRange,
+  isServedViaRepeater,
   servingWirelessHub,
   wifiInfo,
 } from './wireless'
@@ -62,6 +68,7 @@ export {
   upgradeAllPorts,
   upgradeAllSwitchSpeed,
   upgradeCable,
+  upgradeCacheHitRate,
   upgradeDevicePorts,
   upgradeDeviceSpeed,
   upgradeUps,

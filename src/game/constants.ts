@@ -193,6 +193,7 @@ export const SCENARIOS: Scenario[] = [
     challengeStart: 90,
     warmupFloor: 0.5,
     warmupTicks: 75,
+    meteredIncome: true,
     objective:
       'Router and Router-B each carry their own 10 Gigabit Cloud uplink through the Load Balancer. Traffic ramps fast — build ahead of it.',
     firstSteps: [
@@ -219,6 +220,7 @@ export const SCENARIOS: Scenario[] = [
     challengeStart: 65,
     warmupFloor: 0.6,
     warmupTicks: 50,
+    meteredIncome: true,
     objective:
       'Two servers on different subnets trade heavy east-west traffic across a dual-router core. Keep the load balancer and both uplinks ahead of a fast, relentless ramp.',
     firstSteps: [
@@ -340,6 +342,8 @@ export const DEVICE_RULES: Record<
   wireless: { ports: 1, pps: 4, priority: 'bulk', rate: 0 },
   loadBalancer: { ports: 4, pps: 24, priority: 'bulk', rate: 0 },
   honeypot: { ports: 1, pps: 10, priority: 'bulk', rate: 0 },
+  cache: { ports: 1, pps: 999, priority: 'bulk', rate: 0 },
+  repeater: { ports: 1, pps: 0, priority: 'bulk', rate: 0 },
 }
 
 /**
@@ -418,6 +422,8 @@ export const costs: Partial<Record<DeviceKind, number>> = {
   firewall: 110,
   loadBalancer: 150,
   honeypot: 70,
+  cache: 130,
+  repeater: 50,
 }
 
 /** Fraction of eligible investment returned when equipment or links are removed. */
@@ -473,3 +479,28 @@ export const FORWARDING_SPEED_GAIN: Partial<Record<DeviceKind, number>> = {
   wireless: 2,
   loadBalancer: 10,
 }
+
+/** Base chance a bulk/stream Cloud-bound exchange is served by a same-subnet cache instead. */
+export const CACHE_HIT_CHANCE = 0.35
+/** Hit-rate gained per `upgradeCacheHitRate` purchase. */
+export const CACHE_HIT_RATE_STEP = 0.1
+/** Hit-rate ceiling regardless of `Device.cacheLevel`. */
+export const CACHE_HIT_RATE_MAX = 0.55
+/** Per-level price of the cache hit-rate upgrade. */
+export const CACHE_HIT_RATE_COST = 80
+
+/** Canvas-percent radius a repeater extends a parent access point's coverage by. */
+export const REPEATER_RANGE = 12
+/** Extra initial queue delay (ticks) applied to packets from a repeater-served client. */
+export const REPEATER_LATENCY_PENALTY = 1
+
+/** Flat per-window income floor for `Scenario.meteredIncome` scenarios, in whole dollars. */
+export const METERED_BASE_INCOME = 10
+/** Metered-income cents earned per delivered packet, by its priority class. */
+export const METERED_RATE_CENTS: Record<Priority, number> = {
+  realtime: 60,
+  stream: 35,
+  bulk: 20,
+}
+/** Metered payout is capped at this multiple of the flat allocation it replaces, to prevent runaway snowballing. */
+export const METERED_INCOME_CAP_MULTIPLIER = 3

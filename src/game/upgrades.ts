@@ -1,6 +1,10 @@
 import type { Cable, CableTier, GameState } from '../types'
 import {
   CABLE_TIERS,
+  CACHE_HIT_RATE_COST,
+  CACHE_HIT_RATE_MAX,
+  CACHE_HIT_RATE_STEP,
+  CACHE_HIT_CHANCE,
   FORWARDING_SPEED_COSTS,
   FORWARDING_SPEED_GAIN,
   UPS_COST,
@@ -124,6 +128,27 @@ export function upgradeUps(state: GameState, deviceId: string): GameState {
   d.upgradeSpend += UPS_COST
   spendBudget(s, UPS_COST)
   addEvent(s, `${d.label} fitted with a UPS — immune to power outages.`)
+  return s
+}
+
+/**
+ * Raises a cache device's hit rate by one level, capped at `CACHE_HIT_RATE_MAX`.
+ *
+ * @param state - Current game state.
+ * @param deviceId - Cache device to upgrade.
+ * @returns Updated state, or the original state when the upgrade is unavailable.
+ */
+export function upgradeCacheHitRate(state: GameState, deviceId: string): GameState {
+  const s = cloneState(state),
+    d = s.devices.find((x) => x.id === deviceId)
+  if (!d || d.kind !== 'cache') return state
+  const maxLevel = Math.round((CACHE_HIT_RATE_MAX - CACHE_HIT_CHANCE) / CACHE_HIT_RATE_STEP)
+  if (d.cacheLevel >= maxLevel) return state
+  if (!canAfford(s, CACHE_HIT_RATE_COST)) return state
+  d.cacheLevel++
+  d.upgradeSpend += CACHE_HIT_RATE_COST
+  spendBudget(s, CACHE_HIT_RATE_COST)
+  addEvent(s, `${d.label} cache hit rate increased.`)
   return s
 }
 

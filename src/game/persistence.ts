@@ -19,7 +19,7 @@ export function newGame(scenario = 'home', mode: GameState['mode'] = 'normal'): 
       ).length),
   )
   return {
-    version: 11,
+    version: 12,
     phase: 'playing',
     mode,
     scenario: scenarioConfig.id,
@@ -48,6 +48,7 @@ export function newGame(scenario = 'home', mode: GameState['mode'] = 'normal'): 
     history: [],
     historyStride: 1,
     challengeRollCount: 0,
+    windowIncomeCents: 0,
   }
 }
 
@@ -77,7 +78,8 @@ export function networkHealthBonus(state: GameState): number {
  * latency/queue-delay telemetry; version 7 runs predate per-event tick stamps;
  * version 8 runs predate multi-select firewall rules; version 9 runs predate
  * sandbox mode and run-history telemetry; version 10 runs predate DDoS/power-outage
- * events, honeypots, and UPS upgrades.
+ * events, honeypots, and UPS upgrades; version 11 runs predate cache/repeater devices
+ * and metered income.
  * Older or malformed saves are discarded.
  *
  * @param savedGame - Parsed persisted state with a schema version.
@@ -155,5 +157,12 @@ export function migrateSavedGame(
     savedGame.packets = []
     savedGame.version = 11
   }
-  return savedGame.version === 11 ? (savedGame as GameState) : null
+  if (savedGame.version === 11) {
+    savedGame.devices?.forEach((device) => {
+      device.cacheLevel ??= 0
+    })
+    savedGame.windowIncomeCents ??= 0
+    savedGame.version = 12
+  }
+  return savedGame.version === 12 ? (savedGame as GameState) : null
 }

@@ -83,6 +83,8 @@ to survive and score as long as possible against ever-increasing traffic.
 | Server        | $120 | 2           | Unlimited                     | A cross-subnet traffic destination                                   |
 | Load Balancer | $150 | 4           | 24                            | Highest base throughput; +10 pkt-tick upgrade only (no port upgrade) |
 | Honeypot      | $70  | 1           | 10                            | Inert until a DDoS attack starts; see §9                             |
+| Cache         | $130 | 1           | Unlimited                     | Serves same-subnet bulk/stream traffic locally; see below            |
+| Repeater      | $50  | 1           | —                             | Extends a nearby access point's Wi-Fi zone; see §4                   |
 | Cloud Edge    | —    | 2           | Unlimited                     | Fixed, present from the start                                        |
 
 - **Only the router may connect to the Cloud Edge.** Every packet's final
@@ -119,6 +121,16 @@ to survive and score as long as possible against ever-increasing traffic.
   balancer, server, and honeypot from that device's inspector. It makes the
   device immune to power-outage events (see §9); it has no effect on
   equipment-failure wear/health.
+- **Cache ($130)** serves bulk and stream traffic on its own subnet locally
+  instead of round-tripping to the Cloud Edge: a same-subnet bulk/stream
+  exchange has a 35% chance (upgradeable to 55%, $80/level from its
+  inspector) of ending at the cache instead. Realtime traffic and traffic
+  bound for another subnet are never affected. A cache's `Delivered` stat
+  doubles as its "hits served" count.
+- **Repeater ($50)** must sit inside a live access point's coverage; it then
+  projects a second coverage zone of its own (see §4), extending that
+  access point's reach at the cost of a small latency penalty for clients
+  it serves. Repeaters cannot chain off each other.
 
 ## 4. Wi-Fi
 
@@ -150,6 +162,14 @@ to survive and score as long as possible against ever-increasing traffic.
   while it's actively serving clients): for 8–18 ticks its effective range
   drops to 60% and throughput to 50%. The coverage zone and the device
   inspector both flag this while it's active; it clears on its own.
+- A **Repeater** must sit inside a live access point's coverage circle to
+  activate; once active it projects its own second coverage zone (radius 12,
+  shown dotted) around itself. A client inside only the repeater's zone
+  associates with — and counts toward the load of — the repeater's parent
+  hub, at the cost of one extra tick of queue delay versus a direct
+  connection. If the parent hub goes offline or loses too much range to
+  interference, the repeater's zone goes down with it. Repeaters cannot
+  chain off another repeater — only a real access point can anchor one.
 
 ## 5. Routing, VLANs, and firewalls
 
@@ -204,6 +224,11 @@ deliveryRatio × 1000)`, where `survivingRatio` is (currently-connected
 - **Starting budget** and **difficulty** vary by scenario (§8).
 - **Passive income**: every 15 ticks you receive `$25 + 5 × current score
 multiplier` — income grows as the run goes on.
+- **Metered income** (ISP Hub and Data Center only): instead of the flat
+  allocation above, you're paid per packet delivered in that 15-tick window
+  — 60¢ for realtime, 35¢ for stream, 20¢ for bulk — plus a $10 floor, capped
+  at 3× what the flat allocation would have paid. Deliver well and it pays
+  more than the flat rate; deliver nothing and you still get the $10 floor.
 - **Budget bonus events** (§9) add a flat $75.
 - **Delivery milestones** (§6) add a one-time budget award.
 - **Removing equipment or a cable** refunds 90% of what you spent on it
@@ -334,8 +359,8 @@ Listed easiest to hardest (the menu is ordered the same way):
 | Metro Campus   |   ★★★☆☆    |   $200 |        Yes        | Distributed switches, long paths reward redundancy. |
 | Branch Network |   ★★★★☆    |   $120 |        Yes        | Tight budget; every port counts.                    |
 | Arena Night    |   ★★★★☆    |   $240 |        Yes        | Wireless crowd floods access points.                |
-| ISP Hub        |   ★★★★☆    |   $220 |        Yes        | High-volume routing backbone.                       |
-| Data Center    |   ★★★★★    |   $260 |        Yes        | Heavy server-to-server east-west traffic.           |
+| ISP Hub        |   ★★★★☆    |   $220 |        Yes        | High-volume routing backbone; metered income.       |
+| Data Center    |   ★★★★★    |   $260 |        Yes        | Heavy east-west server traffic; metered income.     |
 | Edge Exchange  |   ★★★★★    |   $260 |        Yes        | Realtime services compete with bulk at the edge.    |
 | Smart City     |   ★★★★★    |   $280 |        Yes        | Wired + wireless + firewall + core, fastest ramp.   |
 

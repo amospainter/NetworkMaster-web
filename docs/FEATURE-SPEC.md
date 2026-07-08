@@ -9,7 +9,7 @@ remaining phases land as versions 12-13.
 
 - Phase 1 (schema v10 - peak hours, sandbox mode, run history graph): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
 - Phase 2 (schema v11 - DDoS, honeypot, power outage/UPS): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
-- Phase 3 (schema v12 - cache/CDN, repeater, metered income): [ ] not started.
+- Phase 3 (schema v12 - cache/CDN, repeater, metered income): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
 - Phase 4 (schema v13 - QoS policies, SLA contracts): [ ] not started.
 
 Conventions that apply to every feature below, per `CLAUDE.md`:
@@ -256,9 +256,9 @@ checks budget; site UPS applies discount.
 
 ---
 
-## Phase 3 - New devices and economy (schema v12)
+## Phase 3 - New devices and economy (schema v12) [DONE]
 
-### 7. Cache/CDN node
+### 7. Cache/CDN node [DONE]
 
 **Design.** New buildable `DeviceKind: 'cache'`. Cost $130, 1 port, rate 0,
 not forwarding. A cache serves its own subnet: when a source device on the
@@ -286,7 +286,7 @@ deliveries increment its `delivered`, giving a free stat).
 untouched; realtime traffic never caches; cache on subnet 1 does not serve
 subnet 2; hit-rate upgrade caps at 0.55.
 
-### 8. Wireless repeater
+### 8. Wireless repeater [DONE]
 
 **Design.** New buildable `DeviceKind: 'repeater'`. Cost $50, 1 port
 (uplink cable optional - see below), rate 0. A repeater must sit inside a
@@ -320,7 +320,7 @@ once-per-tick `buildWirelessAssociations` memoization; no per-packet cost.
 parent hub; parent-offline kills the extension; no chaining; repeater-served
 delivery accrues +1 queue delay vs. direct.
 
-### 9. Bandwidth-metered income (scenario modifier)
+### 9. Bandwidth-metered income (scenario modifier) [DONE]
 
 **Design.** New optional `Scenario.meteredIncome?: boolean`, enabled on
 `isp` and `datacenter` (thematically: you are the provider). When set, the

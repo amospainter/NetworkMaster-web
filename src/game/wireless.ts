@@ -1,5 +1,6 @@
 import type { Device, GameState } from '../types'
 import {
+  REPEATER_RANGE,
   WIFI_INTERFERENCE_PPS_FACTOR,
   WIFI_INTERFERENCE_RANGE_FACTOR,
   WIFI_STANDARDS,
@@ -65,46 +66,68 @@ const wirelessClientLoad = (state: GameState, hub: Device) =>
 export function buildWirelessAssociations(state: GameState): Map<string, string> {
   const hubs = state.devices.filter((device) => device.kind === 'wireless' && !device.offline)
   const loadByHubId = new Map(hubs.map((hub) => [hub.id, wirelessClientLoad(state, hub)]))
-  const associations = new Map<string, string>()
-  for (const client of state.devices) {
-    if (!WIRELESS_CAPABLE_KINDS.includes(client.kind)) continue
-    const inRange = hubs.filter((hub) => distanceBetween(hub, client) <= hubRange(hub))
+
+  // Pass 1: a repeater associates to a hub using the same nearest/least-loaded
+  // rule as a client. Repeaters cannot chain off another repeater — only
+  // hubs are eligible parents — so this stays a fixed two-pass resolve.
+  const repeaters = state.devices.filter((device) => device.kind === 'repeater' && !device.offline)
+  const repeaterHubId = new Map<string, string>()
+  for (const repeater of repeaters) {
+    const inRange = hubs.filter((hub) => distanceBetween(hub, repeater) <= hubRange(hub))
     if (!inRange.length) continue
     const bestHub = inRange.sort((firstHub, secondHub) => {
       const loadDelta = loadByHubId.get(firstHub.id)! - loadByHubId.get(secondHub.id)!
       if (loadDelta !== 0) return loadDelta
-      return distanceBetween(firstHub, client) - distanceBetween(secondHub, client)
+      return distanceBetween(firstHub, repeater) - distanceBetween(secondHub, repeater)
     })[0]
-    associations.set(client.id, bestHub.id)
+    repeaterHubId.set(repeater.id, bestHub.id)
+  }
+  const activeRepeaters = repeaters.filter((repeater) => repeaterHubId.has(repeater.id))
+
+  // Pass 2: a client associates directly to an in-range hub, or to an active
+  // repeater's parent hub when only the repeater's extended zone reaches it.
+  const associations = new Map<string, string>()
+  for (const client of state.devices) {
+    if (!WIRELESS_CAPABLE_KINDS.includes(client.kind)) continue
+    const candidates = [
+      ...hubs
+        .filter((hub) => distanceBetween(hub, client) <= hubRange(hub))
+        .map((hub) => ({ hubId: hub.id, distance: distanceBetween(hub, client) })),
+      ...activeRepeaters
+        .filter((repeater) => distanceBetween(repeater, client) <= REPEATER_RANGE)
+        .map((repeater) => ({
+          hubId: repeaterHubId.get(repeater.id)!,
+          distance: distanceBetween(repeater, client),
+        })),
+    ]
+    if (!candidates.length) continue
+    const best = candidates.sort((firstCandidate, secondCandidate) => {
+      const loadDelta =
+        loadByHubId.get(firstCandidate.hubId)! - loadByHubId.get(secondCandidate.hubId)!
+      if (loadDelta !== 0) return loadDelta
+      return firstCandidate.distance - secondCandidate.distance
+    })[0]
+    associations.set(client.id, best.hubId)
   }
   return associations
 }
 
 /**
- * Returns the operational access point covering a wireless-capable client,
- * preferring the least-loaded hub among those in range so clients spread out
- * across access points instead of piling onto a single one; nearest distance
- * breaks ties between equally loaded hubs.
+ * Tests whether a client's serving access point is reached only through a
+ * repeater's extended zone rather than the hub's own direct coverage circle,
+ * so callers can apply the repeater latency penalty without re-deriving the
+ * full two-pass association.
  *
  * @param state - Current game state.
- * @param wirelessDevice - Client seeking an access point.
- * @returns The preferred operational access point, or `undefined` when none is in range.
+ * @param clientId - Wireless-capable client identifier.
+ * @param hubId - The client's resolved serving access point identifier.
+ * @returns Whether the client is outside the hub's own direct range.
  */
-export const findWirelessHub = (state: GameState, wirelessDevice: Device) => {
-  const candidates = state.devices.filter(
-    (candidate) =>
-      candidate.kind === 'wireless' &&
-      !candidate.offline &&
-      distanceBetween(candidate, wirelessDevice) <= hubRange(candidate),
-  )
-  // Precompute each candidate's load once rather than inside the sort
-  // comparator, which would otherwise re-scan every device O(n log n) times.
-  const loadByHubId = new Map(candidates.map((hub) => [hub.id, wirelessClientLoad(state, hub)]))
-  return candidates.sort((firstHub, secondHub) => {
-    const loadDelta = loadByHubId.get(firstHub.id)! - loadByHubId.get(secondHub.id)!
-    if (loadDelta !== 0) return loadDelta
-    return distanceBetween(firstHub, wirelessDevice) - distanceBetween(secondHub, wirelessDevice)
-  })[0]
+export function isServedViaRepeater(state: GameState, clientId: string, hubId: string): boolean {
+  const client = state.devices.find((device) => device.id === clientId)
+  const hub = state.devices.find((device) => device.id === hubId)
+  if (!client || !hub) return false
+  return distanceBetween(client, hub) > hubRange(hub)
 }
 
 /**
@@ -117,7 +140,11 @@ export const findWirelessHub = (state: GameState, wirelessDevice: Device) => {
 export function servingWirelessHub(state: GameState, deviceId: string): Device | null {
   const wirelessDevice = state.devices.find((device) => device.id === deviceId)
   if (!wirelessDevice || !WIRELESS_CAPABLE_KINDS.includes(wirelessDevice.kind)) return null
-  return findWirelessHub(state, wirelessDevice) ?? null
+  // Delegates to the two-pass association (rather than `findWirelessHub`
+  // directly) so a client served only through a repeater's extended zone
+  // still resolves to its actual parent hub here.
+  const hubId = buildWirelessAssociations(state).get(deviceId)
+  return hubId ? (state.devices.find((device) => device.id === hubId) ?? null) : null
 }
 
 /**

@@ -3,6 +3,7 @@ import { computeCableRoutes } from './cableGeometry'
 import {
   addCable,
   CABLE_TIERS,
+  CACHE_HIT_RATE_MAX,
   buildDevice,
   buildWirelessAssociations,
   cycleCableVlan,
@@ -20,6 +21,7 @@ import {
   toggleFirewallRule,
   upgradeAllCables,
   upgradeCable,
+  upgradeCacheHitRate,
   upgradeDeviceSpeed,
   upgradeUps,
   upgradeWifi,
@@ -30,7 +32,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(11)
+      expect(game.version).toBe(12)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -355,9 +357,9 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.events[0].text).toContain('$117 salvage')
   })
 
-  it('initializes the version 11 schema with empty progression state', () => {
+  it('initializes the version 12 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(11)
+    expect(game.version).toBe(12)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
     expect(game.devices.every((device) => device.interference === 0)).toBe(true)
@@ -382,7 +384,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
@@ -397,7 +399,7 @@ describe('NetworkMaster gameplay rules', () => {
     } & Partial<Omit<GameState, 'version' | 'devices'>>
     v3.devices.forEach((device) => delete device.interference)
     const migrated = migrateSavedGame(v3 as unknown as { version: number })
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
   })
 
@@ -408,7 +410,7 @@ describe('NetworkMaster gameplay rules', () => {
       packets: [{ id: 'p1' }],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v4)
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.packets).toEqual([])
   })
 
@@ -423,7 +425,7 @@ describe('NetworkMaster gameplay rules', () => {
       }),
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v5)
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
   })
 
@@ -434,7 +436,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v6.recentLatencyTicks
     delete v6.recentQueueDelayTicks
     const migrated = migrateSavedGame(v6 as unknown as { version: number })
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.recentLatencyTicks).toBe(0)
     expect(migrated?.recentQueueDelayTicks).toBe(0)
   })
@@ -447,7 +449,7 @@ describe('NetworkMaster gameplay rules', () => {
       events: ['Run initialized. Connect clients to bring them online.'],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v7)
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.events).toEqual([
       { tick: 42, text: 'Run initialized. Connect clients to bring them online.' },
     ])
@@ -461,7 +463,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v9.history
     delete v9.historyStride
     const migrated = migrateSavedGame(v9 as unknown as { version: number })
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.mode).toBe('normal')
     expect(migrated?.history).toEqual([])
     expect(migrated?.historyStride).toBe(1)
@@ -475,10 +477,22 @@ describe('NetworkMaster gameplay rules', () => {
     delete v10.challengeRollCount
     v10.packets = [{ id: 'p1' }] as unknown as GameState['packets']
     const migrated = migrateSavedGame(v10 as unknown as { version: number })
-    expect(migrated?.version).toBe(11)
+    expect(migrated?.version).toBe(12)
     expect(migrated?.devices.every((device) => device.ups === false)).toBe(true)
     expect(migrated?.challengeRollCount).toBe(0)
     expect(migrated?.packets).toEqual([])
+  })
+
+  it('migrates a version 11 save by backfilling cache level and metered-income state', () => {
+    const v11 = { ...newGame('home'), version: 11 } as unknown as { version: number } & Partial<
+      Omit<GameState, 'version'>
+    >
+    v11.devices!.forEach((device) => delete (device as Partial<typeof device>).cacheLevel)
+    delete v11.windowIncomeCents
+    const migrated = migrateSavedGame(v11 as unknown as { version: number })
+    expect(migrated?.version).toBe(12)
+    expect(migrated?.devices.every((device) => device.cacheLevel === 0)).toBe(true)
+    expect(migrated?.windowIncomeCents).toBe(0)
   })
 
   it('stamps each event with the tick it happened on, not its position in the list', () => {
@@ -1168,5 +1182,171 @@ describe('NetworkMaster gameplay rules', () => {
     game.tick = scenario.challengeStart - 1
     game = simulate(game)
     expect(game.activeEvents.some((e) => e.kind === 'ddos' || e.kind === 'powerOutage')).toBe(false)
+  })
+
+  it('a bulk exchange can be served by a same-subnet cache instead of round-tripping to the Cloud Edge', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0) // forces the packet-generation and cache-hit rolls to succeed
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const pc = game.devices.find((d) => d.kind === 'pc')! // bulk priority
+    game = addCable(game, pc.id, router.id)
+    game = buildDevice(game, 'cache', 40, 40)
+    const cache = game.devices.find((d) => d.kind === 'cache')!
+    game = addCable(game, cache.id, router.id)
+
+    for (let i = 0; i < 6; i++) game = simulate(game)
+    expect(cache.delivered).not.toBeUndefined() // sanity: cache device exists
+    const cloudUplink = game.cables.find(
+      (c) =>
+        game.devices.find((d) => d.id === c.from)?.kind === 'cloud' ||
+        game.devices.find((d) => d.id === c.to)?.kind === 'cloud',
+    )!
+    expect(game.devices.find((d) => d.id === cache.id)!.delivered).toBeGreaterThan(0)
+    expect(cloudUplink.load).toBe(0)
+    vi.restoreAllMocks()
+  })
+
+  it('realtime traffic never routes to a cache', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const consoleDevice = game.devices.find((d) => d.kind === 'console')! // realtime priority
+    game = addCable(game, consoleDevice.id, router.id)
+    game = buildDevice(game, 'cache', 40, 40)
+    const cache = game.devices.find((d) => d.kind === 'cache')!
+    game = addCable(game, cache.id, router.id)
+
+    for (let i = 0; i < 6; i++) game = simulate(game)
+    expect(game.devices.find((d) => d.id === cache.id)!.delivered).toBe(0)
+    vi.restoreAllMocks()
+  })
+
+  it('cache hit-rate upgrades cap at CACHE_HIT_RATE_MAX', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    game = buildDevice(game, 'cache', 40, 40)
+    const cacheId = game.devices.find((d) => d.kind === 'cache')!.id
+    for (let i = 0; i < 10; i++) game = upgradeCacheHitRate(game, cacheId)
+    const cache = game.devices.find((d) => d.id === cacheId)!
+    const rate = 0.35 + cache.cacheLevel * 0.1
+    expect(Math.min(CACHE_HIT_RATE_MAX, rate)).toBe(CACHE_HIT_RATE_MAX)
+    expect(cache.cacheLevel).toBe(2) // 0.35 + 2*0.10 = 0.55, further levels are rejected
+  })
+
+  it('a client in a repeater zone but outside the parent hub range associates to the hub', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = buildDevice(game, 'wireless', 10, 10) // 802.11b range 14
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    game = buildDevice(game, 'repeater', 20, 10) // 10 units from hub — inside its range
+    game = buildDevice(game, 'phone', 30, 10) // 10 units from repeater, 20 from hub
+    const phone = game.devices.find((d) => d.kind === 'phone')!
+    const associations = buildWirelessAssociations(game)
+    expect(associations.get(phone.id)).toBe(hub.id)
+  })
+
+  it("a repeater's zone dies when its parent hub goes offline", () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = buildDevice(game, 'wireless', 10, 10)
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    game = buildDevice(game, 'repeater', 20, 10)
+    game = buildDevice(game, 'phone', 30, 10)
+    const phone = game.devices.find((d) => d.kind === 'phone')!
+    game.devices.find((d) => d.id === hub.id)!.offline = true
+    const associations = buildWirelessAssociations(game)
+    expect(associations.get(phone.id)).toBeUndefined()
+  })
+
+  it('repeaters cannot chain off another repeater', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = buildDevice(game, 'wireless', 10, 10) // range 14
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    game = buildDevice(game, 'repeater', 20, 10) // active: 10 units from hub
+    game = buildDevice(game, 'repeater', 35, 10) // inactive: 25 units from hub, out of range
+    game = buildDevice(game, 'phone', 40, 10) // 5 units from the inactive repeater only
+    const phone = game.devices.find((d) => d.kind === 'phone')!
+    const associations = buildWirelessAssociations(game)
+    expect(associations.get(phone.id)).toBeUndefined()
+  })
+
+  it('a repeater-served delivery accrues +1 queue delay versus a direct connection', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    let game = newGame('home')
+    game.budget = 10_000
+    const router = game.devices.find((d) => d.kind === 'router')!
+    game = buildDevice(game, 'wireless', 10, 10)
+    const hub = game.devices.find((d) => d.kind === 'wireless')!
+    game = addCable(game, hub.id, router.id)
+    game = buildDevice(game, 'repeater', 20, 10)
+    game = buildDevice(game, 'phone', 30, 10) // repeater-served only
+    const phone = game.devices.find((d) => d.kind === 'phone')!
+
+    game = simulate(game)
+    const phonePacket = game.packets.find((p) => p.source === phone.id)
+    expect(phonePacket?.queuedTicks).toBe(1)
+    vi.restoreAllMocks()
+  })
+
+  it('non-metered scenarios keep the flat periodic budget allocation', () => {
+    let game = withoutSources(newGame('home'))
+    game.tick = 14
+    game.budget = 0
+    game = simulate(game)
+    expect(game.budget).toBe(30) // 25 + 5 * multiplier(1)
+  })
+
+  it('a metered-income scenario pays only the base amount when nothing was delivered', () => {
+    let game = withoutSources(newGame('isp'))
+    game.tick = 14
+    game.budget = 0
+    game.windowIncomeCents = 0
+    game = simulate(game)
+    expect(game.budget).toBe(10) // METERED_BASE_INCOME only
+  })
+
+  it('metered income pays more for a realtime delivery than an equivalent bulk one', () => {
+    const deliverOnce = (priority: 'realtime' | 'bulk') => {
+      const game = withoutSources(newGame('isp'))
+      game.budget = 500
+      const cloud = game.devices.find((d) => d.kind === 'cloud')!
+      const router = game.devices.find((d) => d.kind === 'router')!
+      game.packets = [
+        {
+          id: 'p',
+          path: [router.id, cloud.id],
+          hop: 0,
+          progress: 0.9,
+          priority,
+          owner: router.id,
+          source: router.id,
+          generatedTick: game.tick,
+          queuedTicks: 0,
+        },
+      ]
+      return simulate(game)
+    }
+    expect(deliverOnce('realtime').windowIncomeCents).toBeGreaterThan(
+      deliverOnce('bulk').windowIncomeCents,
+    )
+  })
+
+  it('metered income payout is capped at 3x the flat allocation it replaces', () => {
+    let game = withoutSources(newGame('isp'))
+    game.tick = 14
+    game.budget = 0
+    game.windowIncomeCents = 100_000
+    game = simulate(game)
+    expect(game.budget).toBe(90) // (25 + 5 * multiplier(1)) * 3
+    expect(game.windowIncomeCents).toBe(0)
   })
 })
