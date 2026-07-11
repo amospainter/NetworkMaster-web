@@ -504,3 +504,22 @@ export const METERED_RATE_CENTS: Record<Priority, number> = {
 }
 /** Metered payout is capped at this multiple of the flat allocation it replaces, to prevent runaway snowballing. */
 export const METERED_INCOME_CAP_MULTIPLIER = 3
+
+/** Extra sort weight a boosted priority class gets at its device, well above the highest base `PRIORITY_WEIGHT`. */
+export const QOS_BOOST_WEIGHT = 10
+/** Fraction of admission capacity a device gives up while a QoS boost is set, floored at 1 pkt/tick. */
+export const QOS_OVERHEAD = 0.1
+/** Cycle order for `Device.qosBoost`: no boost, then each priority class, then back to none. */
+export const QOS_BOOST_CYCLE: (Priority | null)[] = [null, 'realtime', 'stream', 'bulk']
+
+/** Ticks between SLA contract offers once a scenario's `challengeStart` is reached. */
+export const SLA_OFFER_INTERVAL_TICKS = 120
+/** Ticks an offered SLA contract stays pending before it auto-declines. */
+export const SLA_DECISION_TICKS = 10
+/** Ticks an accepted SLA contract's window lasts. */
+export const SLA_WINDOW_TICKS = 50
+/** Consecutive over-target ticks a latency contract tolerates before failing. */
+export const SLA_GRACE = 5
+/** Reward range (whole dollars), scaled by scenario difficulty (1 through 5). */
+export const SLA_REWARD_MIN = 80
+export const SLA_REWARD_MAX = 200

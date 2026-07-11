@@ -195,6 +195,14 @@ to survive and score as long as possible against ever-increasing traffic.
   VLAN, change a firewall rule) immediately clears in-flight packets, since
   their precomputed route may no longer be valid. The next tick rebuilds
   routes from the new topology.
+- **QoS boost**: any router, switch, wireless access point, firewall, or load
+  balancer can set a free boost from its inspector, cycling none → realtime →
+  stream → bulk → none. A boosted class always sorts above everything else
+  arriving at that device that tick, regardless of its own base priority —
+  but the device's effective admission capacity drops by 10% (floored at 1
+  pkt/tick) the whole time a boost is set. Displayed throughput in the
+  inspector is unaffected; the tradeoff shows as a `(−10% QoS)` suffix
+  instead, so the base number stays honest.
 
 ## 6. Scoring
 
@@ -231,6 +239,17 @@ multiplier` — income grows as the run goes on.
   more than the flat rate; deliver nothing and you still get the $10 floor.
 - **Budget bonus events** (§9) add a flat $75.
 - **Delivery milestones** (§6) add a one-time budget award.
+- **SLA contracts**: from a scenario's first challenge-event window onward,
+  an offer appears in the top bar every 120 ticks (only while none is
+  active) — accept or decline within 10 ticks, or it auto-declines. Each
+  offer is self-balanced against your current run: a **latency** contract
+  asks you to hold delivery latency under a target for 50 ticks (fails
+  immediately after 5 consecutive ticks over target); a **delivery**
+  contract asks you to deliver a target packet count, paying out the moment
+  you hit it. Reward is $80–200 (scaled by scenario difficulty) paid to
+  budget on success; failure — a latency breach or a delivery contract that
+  never reaches its count — costs double the reward in **score**, not
+  budget. Sandbox runs still see contracts and pay/penalize normally.
 - **Removing equipment or a cable** refunds 90% of what you spent on it
   (build cost + every upgrade), rounded down.
 - **Site Upgrades** (top bar) bulk-apply an upgrade to every eligible piece
@@ -384,6 +403,9 @@ just the first — it's scenario context, not a one-time tutorial.
 
 - **Score / multiplier**, **Delivered**, **Dropped**, **Combo**, **Budget**,
   and **Failure pressure** (with a live bar) sit across the top.
+- An **SLA chip** appears in the top bar whenever a contract is offered or
+  active, showing its kind, target, reward, and ticks remaining, with
+  Accept/Decline buttons while still pending.
 - **Run Stats** (footer button) adds delivered/dropped totals, clean combo,
   the rolling drop window, traffic ramp, and the two telemetry averages:
   **average delivery latency** (ticks from generation to arrival) and
@@ -393,9 +415,10 @@ just the first — it's scenario context, not a one-time tutorial.
   latency plotted across the whole run so far. The same chart appears on the
   game-over screen once a run ends.
 - **Device inspector** shows status, ports, health/wear, throughput (with a
-  live load bar for forwarding devices), delivered/generated, Wi-Fi link
-  status, independent-path count, and — for wireless — current Wi-Fi
-  generation and interference state.
+  live load bar for forwarding devices, and a `(−10% QoS)` suffix while a
+  boost is set), delivered/generated, Wi-Fi link status, independent-path
+  count, and — for wireless — current Wi-Fi generation and interference
+  state. Forwarding devices also show a QoS boost cycle button.
 - **Cable inspector** shows tier, live traffic, status, age, style, and VLAN,
   plus upgrade/reroute/delete actions.
 - **Minimap** (canvas corner) gives a always-visible overview of every device

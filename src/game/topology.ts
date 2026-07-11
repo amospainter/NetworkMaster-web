@@ -1,5 +1,12 @@
 import type { CableStyle, CableTier, Device, DeviceKind, GameState } from '../types'
-import { CABLE_TIERS, costs, SALVAGE_RATE, WIRELESS_ONLY_KINDS } from './constants'
+import {
+  CABLE_TIERS,
+  costs,
+  FORWARDING_KINDS,
+  QOS_BOOST_CYCLE,
+  SALVAGE_RATE,
+  WIRELESS_ONLY_KINDS,
+} from './constants'
 import { createCable, createDevice } from './factories'
 import { addEvent, canAfford, cloneState, event, spendBudget } from './utils'
 
@@ -277,6 +284,26 @@ export function toggleFirewallRule(
     nextState,
     `${firewall.label} block rules: ${firewall.firewallRules.join(', ') || 'none'}.`,
   )
+  return nextState
+}
+
+/**
+ * Cycles a forwarding device's QoS boost through no boost, realtime, stream,
+ * bulk, and back to none. A set boost sorts its priority class above
+ * everything else at that device on admission, at the cost of reduced
+ * effective throughput (`QOS_OVERHEAD`, applied in `simulate.ts`).
+ *
+ * @param state - Current game state.
+ * @param deviceId - Forwarding device whose boost should cycle.
+ * @returns Updated state, or the original state for a missing/non-forwarding device.
+ */
+export function cycleQosBoost(state: GameState, deviceId: string): GameState {
+  const nextState = cloneState(state)
+  const device = nextState.devices.find((candidate) => candidate.id === deviceId)
+  if (!device || !FORWARDING_KINDS.includes(device.kind)) return state
+  const nextIndex = (QOS_BOOST_CYCLE.indexOf(device.qosBoost) + 1) % QOS_BOOST_CYCLE.length
+  device.qosBoost = QOS_BOOST_CYCLE[nextIndex]
+  addEvent(nextState, `${device.label} QoS boost set to ${device.qosBoost ?? 'none'}.`)
   return nextState
 }
 

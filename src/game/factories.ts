@@ -39,6 +39,7 @@ export const createDevice = (
   interference: 0,
   ups: false,
   cacheLevel: 0,
+  qosBoost: null,
 })
 
 /**

@@ -26,6 +26,8 @@ const emit = defineEmits<{
   exitToMenu: []
   togglePause: []
   openLeaderboard: []
+  acceptSla: []
+  declineSla: []
 }>()
 
 /**
@@ -55,6 +57,21 @@ function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
     </div>
     <div class="scenario-tag">{{ SCENARIOS.find((s) => s.id === game.scenario)?.name }}</div>
     <div v-if="game.mode === 'sandbox'" class="scenario-tag sandbox-tag">SANDBOX · UNSCORED</div>
+    <div v-if="game.slaContract" class="sla-chip" :class="{ pending: !game.slaContract.accepted }">
+      <span
+        >SLA ·
+        {{
+          game.slaContract.kind === 'latency'
+            ? `latency < ${game.slaContract.target}t`
+            : `deliver ${game.slaContract.target} pkt`
+        }}
+        · ${{ game.slaContract.reward }} · {{ game.slaContract.ticksRemaining }}t</span
+      >
+      <template v-if="!game.slaContract.accepted">
+        <button class="sla-accept" @click="emit('acceptSla')">Accept</button>
+        <button class="sla-decline" @click="emit('declineSla')">Decline</button>
+      </template>
+    </div>
     <div class="top-actions">
       <button class="upgrade-nav" @click="emit('openUpgrades')"><Zap /> Site Upgrades</button
       ><button @click="emit('openHelp')"><HelpCircle /> Help</button
@@ -77,6 +94,25 @@ function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
       </button>
     </div>
     <div v-if="mobileMenuOpen" class="mobile-overflow-menu">
+      <div
+        v-if="game.slaContract"
+        class="sla-chip mobile-sla"
+        :class="{ pending: !game.slaContract.accepted }"
+      >
+        <span
+          >SLA ·
+          {{
+            game.slaContract.kind === 'latency'
+              ? `latency < ${game.slaContract.target}t`
+              : `deliver ${game.slaContract.target} pkt`
+          }}
+          · ${{ game.slaContract.reward }} · {{ game.slaContract.ticksRemaining }}t</span
+        >
+        <template v-if="!game.slaContract.accepted">
+          <button class="sla-accept" @click="emit('acceptSla')">Accept</button>
+          <button class="sla-decline" @click="emit('declineSla')">Decline</button>
+        </template>
+      </div>
       <button @click="openMobilePanel('upgrades')"><Zap /> Site upgrades</button>
       <button @click="openMobilePanel('help')"><HelpCircle /> Help</button>
       <button @click="openMobilePanel('leaderboard')">Scores</button>
@@ -123,5 +159,38 @@ function openMobilePanel(panel: 'upgrades' | 'help' | 'leaderboard') {
 .sandbox-tag {
   color: var(--warn, #d9a441);
   border-color: var(--warn, #d9a441);
+}
+.sla-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 10px var(--font-ui);
+  padding: 3px 8px;
+  border: 1px solid var(--lime);
+  border-radius: 4px;
+  color: var(--lime);
+  white-space: nowrap;
+}
+.sla-chip.pending {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.sla-chip button {
+  font: 700 10px var(--font-ui);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.sla-accept {
+  background: var(--warn);
+  color: var(--accent-ink);
+}
+.sla-decline {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+.mobile-sla {
+  flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
 }
 </style>

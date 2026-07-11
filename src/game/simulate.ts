@@ -1,4 +1,4 @@
-import type { Device, GameState, Packet, Scenario } from '../types'
+import type { Device, GameState, Packet, Scenario, SlaContract } from '../types'
 import {
   CACHE_HIT_CHANCE,
   CACHE_HIT_RATE_MAX,
@@ -20,9 +20,17 @@ import {
   PEAK_AMPLITUDE,
   PEAK_PERIOD_TICKS,
   PRIORITY_WEIGHT,
+  QOS_BOOST_WEIGHT,
+  QOS_OVERHEAD,
   QUEUE_CAPACITY_TICKS,
   REPEATER_LATENCY_PENALTY,
   SCENARIOS,
+  SLA_DECISION_TICKS,
+  SLA_GRACE,
+  SLA_OFFER_INTERVAL_TICKS,
+  SLA_REWARD_MAX,
+  SLA_REWARD_MIN,
+  SLA_WINDOW_TICKS,
   SOURCE_SPAWN_ORDER,
   WIRELESS_CAPABLE_KINDS,
   WIRELESS_ONLY_KINDS,
@@ -379,6 +387,108 @@ function checkMilestones(state: GameState) {
 }
 
 /**
+ * Offers a new SLA contract, self-balanced against the run's current
+ * telemetry so each offer is roughly "beat your current self by ~15%"
+ * regardless of scenario or skill level. Does nothing while one is already
+ * offered or active.
+ *
+ * @param state - Mutable simulation draft.
+ * @param scenario - Active scenario, whose `difficulty` scales the reward.
+ * @returns Nothing; any new offer is applied to the draft.
+ */
+function offerSlaContract(state: GameState, scenario: Scenario) {
+  if (state.slaContract) return
+  const kind: SlaContract['kind'] = chance(0.5) ? 'latency' : 'delivery'
+  const reward = Math.round(
+    SLA_REWARD_MIN + ((SLA_REWARD_MAX - SLA_REWARD_MIN) * (scenario.difficulty - 1)) / 4,
+  )
+  // No dedicated per-tick delivery-rate telemetry exists yet, so the delivery
+  // target approximates "recent" throughput from the run's lifetime average
+  // — close enough for a self-balancing target, without a new rolling window.
+  const target =
+    kind === 'latency'
+      ? Math.max(2, Math.round(state.recentLatencyTicks * 0.85 * 10) / 10)
+      : Math.max(
+          5,
+          Math.round((state.delivered / Math.max(1, state.tick)) * SLA_WINDOW_TICKS * 1.1),
+        )
+  state.slaContract = {
+    id: createId(),
+    kind,
+    target,
+    windowTicks: SLA_WINDOW_TICKS,
+    reward,
+    penaltyScore: reward * 2,
+    ticksRemaining: SLA_DECISION_TICKS,
+    accepted: false,
+    breachStreak: 0,
+    deliveredSinceAccept: 0,
+  }
+  addEvent(
+    state,
+    `SLA offered: ${kind === 'latency' ? `hold latency under ${target}t` : `deliver ${target} packets`} for $${reward} — accept within ${SLA_DECISION_TICKS} ticks.`,
+  )
+}
+
+/**
+ * Advances the offered/accepted SLA contract by one tick: counts down the
+ * accept-or-decline window, auto-declining once it lapses; while accepted,
+ * evaluates a latency contract's breach streak or a delivery contract's
+ * accrued count, paying out or penalizing on success/failure and expiry.
+ *
+ * @param state - Mutable simulation draft.
+ * @returns Nothing; `state.slaContract` is updated or cleared in place.
+ */
+function tickSlaContract(state: GameState) {
+  const contract = state.slaContract
+  if (!contract) return
+  if (!contract.accepted) {
+    contract.ticksRemaining--
+    if (contract.ticksRemaining <= 0) {
+      addEvent(state, 'SLA offer expired — auto-declined.')
+      state.slaContract = null
+    }
+    return
+  }
+  contract.ticksRemaining--
+  if (contract.kind === 'delivery' && contract.deliveredSinceAccept >= contract.target) {
+    state.budget += contract.reward
+    addEvent(state, `SLA fulfilled — delivered ${contract.target}+ packets. +$${contract.reward}.`)
+    state.slaContract = null
+    return
+  }
+  if (contract.kind === 'latency') {
+    if (state.recentLatencyTicks > contract.target) {
+      contract.breachStreak++
+      if (contract.breachStreak >= SLA_GRACE) {
+        state.score -= contract.penaltyScore
+        addEvent(
+          state,
+          `SLA breached — latency exceeded ${contract.target}t for ${SLA_GRACE} ticks straight. -${contract.penaltyScore} score.`,
+        )
+        state.slaContract = null
+        return
+      }
+    } else {
+      contract.breachStreak = 0
+    }
+  }
+  if (contract.ticksRemaining <= 0) {
+    if (contract.kind === 'latency') {
+      state.budget += contract.reward
+      addEvent(
+        state,
+        `SLA fulfilled — latency held under ${contract.target}t. +$${contract.reward}.`,
+      )
+    } else {
+      state.score -= contract.penaltyScore
+      addEvent(state, `SLA failed — delivery target missed. -${contract.penaltyScore} score.`)
+    }
+    state.slaContract = null
+  }
+}
+
+/**
  * Advances the deterministic game model by one simulation tick.
  *
  * The reducer never mutates the caller's object. Its phases mirror the native
@@ -459,10 +569,18 @@ export function simulate(state: GameState): GameState {
       admittedPackets.push(...eligibleArrivals)
       continue
     }
-    const capacity = deviceCapacity(arrivingDevice)
-    const ordered = [...eligibleArrivals].sort(
-      (a, b) => PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority],
-    )
+    // A QoS boost sorts its priority class above everything else at this
+    // device (regardless of base class), at the cost of reduced effective
+    // admission capacity — display capacity (`deviceCapacity`) stays honest;
+    // the tradeoff applies only here, at the admission site.
+    const boost = arrivingDevice.qosBoost
+    const capacity = boost
+      ? Math.max(1, Math.floor(deviceCapacity(arrivingDevice) * (1 - QOS_OVERHEAD)))
+      : deviceCapacity(arrivingDevice)
+    const admissionWeight = (packetToWeigh: Packet) =>
+      PRIORITY_WEIGHT[packetToWeigh.priority] +
+      (packetToWeigh.priority === boost ? QOS_BOOST_WEIGHT : 0)
+    const ordered = [...eligibleArrivals].sort((a, b) => admissionWeight(b) - admissionWeight(a))
     admittedPackets.push(...ordered.slice(0, capacity))
     const overflow = ordered.slice(capacity)
     for (const overflowPacket of overflow) {
@@ -524,6 +642,8 @@ export function simulate(state: GameState): GameState {
       (device) => device.id === (deliveredPacket.owner ?? deliveredPacket.source),
     )
     if (ownerDevice) ownerDevice.delivered++
+    if (nextState.slaContract?.accepted && nextState.slaContract.kind === 'delivery')
+      nextState.slaContract.deliveredSinceAccept++
     const routeSourceId = deliveredPacket.path[0]
     const destinationId = deliveredPacket.path[deliveredPacket.path.length - 1]
     // A cache hit's destination is the cache itself rather than the Cloud
@@ -784,6 +904,13 @@ export function simulate(state: GameState): GameState {
   tickActiveEvents(nextState)
   checkMilestones(nextState)
   tickWirelessInterference(nextState)
+  if (
+    nextState.tick >= scenarioConfig.challengeStart &&
+    (nextState.tick - scenarioConfig.challengeStart) % SLA_OFFER_INTERVAL_TICKS === 0
+  ) {
+    offerSlaContract(nextState, scenarioConfig)
+  }
+  tickSlaContract(nextState)
 
   const shouldEndRun =
     nextState.mode !== 'sandbox' &&

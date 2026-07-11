@@ -153,6 +153,40 @@ export function upgradeCacheHitRate(state: GameState, deviceId: string): GameSta
 }
 
 /**
+ * Accepts the currently offered (not yet decided) SLA contract, starting its
+ * window.
+ *
+ * @param state - Current game state.
+ * @returns Updated state, or the original state when there is no pending offer.
+ */
+export function acceptSlaContract(state: GameState): GameState {
+  const s = cloneState(state)
+  const contract = s.slaContract
+  if (!contract || contract.accepted) return state
+  contract.accepted = true
+  contract.ticksRemaining = contract.windowTicks
+  addEvent(
+    s,
+    `SLA accepted: ${contract.kind === 'latency' ? `latency under ${contract.target}t` : `deliver ${contract.target} packets`}.`,
+  )
+  return s
+}
+
+/**
+ * Declines the currently offered (not yet decided) SLA contract.
+ *
+ * @param state - Current game state.
+ * @returns Updated state, or the original state when there is no pending offer.
+ */
+export function declineSlaContract(state: GameState): GameState {
+  const s = cloneState(state)
+  if (!s.slaContract || s.slaContract.accepted) return state
+  addEvent(s, 'SLA offer declined.')
+  s.slaContract = null
+  return s
+}
+
+/**
  * Restores an infrastructure device while intentionally retaining accumulated wear.
  *
  * @param state - Current game state.

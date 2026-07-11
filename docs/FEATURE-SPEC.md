@@ -10,7 +10,7 @@ remaining phases land as versions 12-13.
 - Phase 1 (schema v10 - peak hours, sandbox mode, run history graph): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
 - Phase 2 (schema v11 - DDoS, honeypot, power outage/UPS): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
 - Phase 3 (schema v12 - cache/CDN, repeater, metered income): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
-- Phase 4 (schema v13 - QoS policies, SLA contracts): [ ] not started.
+- Phase 4 (schema v13 - QoS policies, SLA contracts): **[DONE]** - shipped, tested, docs updated (`CLAUDE.md`, `HOWTOPLAY.md`, `PARITY.md`, in-app Help modal).
 
 Conventions that apply to every feature below, per `CLAUDE.md`:
 
@@ -351,9 +351,9 @@ scenarios unchanged.
 
 ---
 
-## Phase 4 - Player decision layers (schema v13)
+## Phase 4 - Player decision layers (schema v13) [DONE]
 
-### 10. QoS policies (per-device priority boost)
+### 10. QoS policies (per-device priority boost) [DONE]
 
 **Design.** Expose the existing strict-priority admission as a decision.
 Each forwarding device gets `Device.qosBoost: Priority | null` (default
@@ -381,7 +381,7 @@ admission site so display capacity stays honest - inspector shows
 capacity reduction applies only while a boost is set; cycling walks
 null -> realtime -> stream -> bulk -> null.
 
-### 11. SLA contracts
+### 11. SLA contracts [DONE]
 
 **Design.** From `challengeStart` onward, every 120 ticks a contract is
 offered (event-feed line + HUD chip with Accept/Decline; auto-declines

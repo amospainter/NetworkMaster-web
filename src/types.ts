@@ -65,6 +65,8 @@ export type Device = {
   ups: boolean
   /** Generic per-kind upgrade counter; currently only raises a cache device's hit rate. */
   cacheLevel: number
+  /** Priority class this forwarding device boosts above everything else on arrival, or null for no boost. */
+  qosBoost: Priority | null
 }
 
 /** An undirected, capacity-limited edge in the network graph. */
@@ -133,7 +135,7 @@ export type Packet = {
 /** Versioned, JSON-safe state persisted directly to browser localStorage. */
 export type GameState = {
   /** Save-schema discriminator. Increment when migrations require a new persisted shape. */
-  version: 12
+  version: 13
   phase: 'playing' | 'paused' | 'gameover'
   /** Sandbox runs skip budget gating and game over, and never write scores. */
   mode: 'normal' | 'sandbox'
@@ -178,6 +180,8 @@ export type GameState = {
   challengeRollCount: number
   /** Accumulated metered-income cents within the current payout window; only used by `Scenario.meteredIncome` scenarios. */
   windowIncomeCents: number
+  /** Currently offered or accepted SLA contract; at most one at a time. */
+  slaContract: SlaContract | null
 }
 
 /** One compact per-tick telemetry sample for the run-history chart. */
@@ -190,6 +194,31 @@ export type HistorySample = {
   f: number
   /** Rolling delivery latency in ticks at this tick. */
   l: number
+}
+
+/**
+ * A time-boxed offer that pays budget for sustaining a telemetry target, or
+ * costs score on failure. Offered periodically; at most one is active.
+ */
+export type SlaContract = {
+  id: string
+  /** `latency`: keep `recentLatencyTicks` under `target`. `delivery`: deliver `target` packets since acceptance. */
+  kind: 'latency' | 'delivery'
+  /** Latency ticks (fractional) or a packet count, depending on `kind`. */
+  target: number
+  /** Ticks the accepted window lasts; also the auto-decline countdown before acceptance. */
+  windowTicks: number
+  /** Budget paid on success. */
+  reward: number
+  /** Score lost on failure (breach or missed window); `reward * 2`. */
+  penaltyScore: number
+  /** Ticks left in the current phase: the accept/decline countdown before `accepted`, the contract window after. */
+  ticksRemaining: number
+  accepted: boolean
+  /** Consecutive ticks `recentLatencyTicks` has exceeded `target`; a `latency` contract fails once this reaches `SLA_GRACE`. */
+  breachStreak: number
+  /** Non-junk packets delivered since acceptance; a `delivery` contract succeeds once this reaches `target`. */
+  deliveredSinceAccept: number
 }
 
 /** A completed run recorded for the local, score-sorted leaderboard. */

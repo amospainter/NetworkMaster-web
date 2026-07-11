@@ -1,18 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import { computeCableRoutes } from './cableGeometry'
 import {
+  acceptSlaContract,
   addCable,
   CABLE_TIERS,
   CACHE_HIT_RATE_MAX,
   buildDevice,
   buildWirelessAssociations,
   cycleCableVlan,
+  cycleQosBoost,
+  declineSlaContract,
   findRoute,
   independentPathCount,
   migrateSavedGame,
   moveDevice,
   networkHealthBonus,
   newGame,
+  QOS_OVERHEAD,
   removeDevice,
   rerouteCable,
   SCENARIOS,
@@ -32,7 +36,7 @@ describe('NetworkMaster gameplay rules', () => {
   it('builds every iOS scenario with a cloud uplink and valid port counts', () => {
     for (const scenario of SCENARIOS) {
       const game = newGame(scenario.id)
-      expect(game.version).toBe(12)
+      expect(game.version).toBe(13)
       expect(game.devices.some((d) => d.kind === 'cloud')).toBe(true)
       expect(game.devices.some((d) => d.kind === 'router')).toBe(true)
       for (const device of game.devices) {
@@ -357,9 +361,9 @@ describe('NetworkMaster gameplay rules', () => {
     expect(game.events[0].text).toContain('$117 salvage')
   })
 
-  it('initializes the version 12 schema with empty progression state', () => {
+  it('initializes the version 13 schema with empty progression state', () => {
     const game = newGame('home')
-    expect(game.version).toBe(12)
+    expect(game.version).toBe(13)
     expect(game.milestonesReached).toEqual([])
     expect(game.activeEvents).toEqual([])
     expect(game.devices.every((device) => device.interference === 0)).toBe(true)
@@ -384,7 +388,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete legacy.milestonesReached
     delete legacy.activeEvents
     const migrated = migrateSavedGame(legacy as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.milestonesReached).toEqual([])
     expect(migrated?.activeEvents).toEqual([])
     expect(migrated?.devices.every((device) => device.upgradeSpend === 0)).toBe(true)
@@ -399,7 +403,7 @@ describe('NetworkMaster gameplay rules', () => {
     } & Partial<Omit<GameState, 'version' | 'devices'>>
     v3.devices.forEach((device) => delete device.interference)
     const migrated = migrateSavedGame(v3 as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.devices.every((device) => device.interference === 0)).toBe(true)
   })
 
@@ -410,7 +414,7 @@ describe('NetworkMaster gameplay rules', () => {
       packets: [{ id: 'p1' }],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v4)
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.packets).toEqual([])
   })
 
@@ -425,7 +429,7 @@ describe('NetworkMaster gameplay rules', () => {
       }),
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v5)
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.cables.every((c) => c.style === 'rightAngle')).toBe(true)
   })
 
@@ -436,7 +440,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v6.recentLatencyTicks
     delete v6.recentQueueDelayTicks
     const migrated = migrateSavedGame(v6 as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.recentLatencyTicks).toBe(0)
     expect(migrated?.recentQueueDelayTicks).toBe(0)
   })
@@ -449,7 +453,7 @@ describe('NetworkMaster gameplay rules', () => {
       events: ['Run initialized. Connect clients to bring them online.'],
     } as unknown as { version: number }
     const migrated = migrateSavedGame(v7)
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.events).toEqual([
       { tick: 42, text: 'Run initialized. Connect clients to bring them online.' },
     ])
@@ -463,7 +467,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v9.history
     delete v9.historyStride
     const migrated = migrateSavedGame(v9 as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.mode).toBe('normal')
     expect(migrated?.history).toEqual([])
     expect(migrated?.historyStride).toBe(1)
@@ -477,7 +481,7 @@ describe('NetworkMaster gameplay rules', () => {
     delete v10.challengeRollCount
     v10.packets = [{ id: 'p1' }] as unknown as GameState['packets']
     const migrated = migrateSavedGame(v10 as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.devices.every((device) => device.ups === false)).toBe(true)
     expect(migrated?.challengeRollCount).toBe(0)
     expect(migrated?.packets).toEqual([])
@@ -490,9 +494,21 @@ describe('NetworkMaster gameplay rules', () => {
     v11.devices!.forEach((device) => delete (device as Partial<typeof device>).cacheLevel)
     delete v11.windowIncomeCents
     const migrated = migrateSavedGame(v11 as unknown as { version: number })
-    expect(migrated?.version).toBe(12)
+    expect(migrated?.version).toBe(13)
     expect(migrated?.devices.every((device) => device.cacheLevel === 0)).toBe(true)
     expect(migrated?.windowIncomeCents).toBe(0)
+  })
+
+  it('migrates a version 12 save by backfilling QoS boosts and SLA contract state', () => {
+    const v12 = { ...newGame('home'), version: 12 } as unknown as { version: number } & Partial<
+      Omit<GameState, 'version'>
+    >
+    v12.devices!.forEach((device) => delete (device as Partial<typeof device>).qosBoost)
+    delete v12.slaContract
+    const migrated = migrateSavedGame(v12 as unknown as { version: number })
+    expect(migrated?.version).toBe(13)
+    expect(migrated?.devices.every((device) => device.qosBoost === null)).toBe(true)
+    expect(migrated?.slaContract).toBeNull()
   })
 
   it('stamps each event with the tick it happened on, not its position in the list', () => {
@@ -1348,5 +1364,253 @@ describe('NetworkMaster gameplay rules', () => {
     game = simulate(game)
     expect(game.budget).toBe(90) // (25 + 5 * multiplier(1)) * 3
     expect(game.windowIncomeCents).toBe(0)
+  })
+
+  it('cycles a forwarding device QoS boost through null -> realtime -> stream -> bulk -> null', () => {
+    let game = newGame('home')
+    const router = game.devices.find((d) => d.kind === 'router')!
+    expect(router.qosBoost).toBeNull()
+    game = cycleQosBoost(game, router.id)
+    expect(game.devices.find((d) => d.id === router.id)!.qosBoost).toBe('realtime')
+    game = cycleQosBoost(game, router.id)
+    expect(game.devices.find((d) => d.id === router.id)!.qosBoost).toBe('stream')
+    game = cycleQosBoost(game, router.id)
+    expect(game.devices.find((d) => d.id === router.id)!.qosBoost).toBe('bulk')
+    game = cycleQosBoost(game, router.id)
+    expect(game.devices.find((d) => d.id === router.id)!.qosBoost).toBeNull()
+  })
+
+  it('cycleQosBoost is a no-op on a non-forwarding device', () => {
+    let game = newGame('home')
+    game.budget = 10_000
+    game = buildDevice(game, 'cache', 40, 40)
+    const cache = game.devices.find((d) => d.kind === 'cache')!
+    const unchanged = cycleQosBoost(game, cache.id)
+    expect(unchanged.devices.find((d) => d.id === cache.id)!.qosBoost).toBeNull()
+  })
+
+  it('a QoS-boosted class admits before an unboosted higher-priority class at that device', () => {
+    let game = withoutSources(newGame('startup'))
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const switchDevice = game.devices.find((d) => d.kind === 'switch')!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    switchDevice.pps = 1
+    switchDevice.qosBoost = 'bulk'
+    game.packets = [
+      {
+        id: 'realtime-1',
+        path: [router.id, switchDevice.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'realtime',
+        owner: router.id,
+        source: router.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+      },
+      {
+        id: 'bulk-1',
+        path: [router.id, switchDevice.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        owner: router.id,
+        source: router.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+      },
+    ]
+    game = simulate(game)
+    const bulkPacket = game.packets.find((p) => p.id === 'bulk-1')!
+    const realtimePacket = game.packets.find((p) => p.id === 'realtime-1')!
+    expect(bulkPacket.hop).toBe(1) // boosted bulk admitted
+    expect(realtimePacket.hop).toBe(0) // unboosted realtime queued instead
+    expect(realtimePacket.queuedTicks).toBe(1)
+  })
+
+  it('a QoS boost reduces effective admission capacity, floored at 1; no boost leaves it unchanged', () => {
+    const buildArrivals = (boost: 'realtime' | null) => {
+      const game = withoutSources(newGame('startup'))
+      const router = game.devices.find((d) => d.kind === 'router')!
+      const switchDevice = game.devices.find((d) => d.kind === 'switch')!
+      const cloud = game.devices.find((d) => d.kind === 'cloud')!
+      switchDevice.pps = 10
+      switchDevice.qosBoost = boost
+      game.packets = Array.from({ length: 10 }, (_, index) => ({
+        id: `p${index}`,
+        path: [router.id, switchDevice.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk' as const,
+        owner: router.id,
+        source: router.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+      }))
+      return simulate(game).packets.filter((p) => p.hop === 1).length
+    }
+    expect(buildArrivals('realtime')).toBe(Math.max(1, Math.floor(10 * (1 - QOS_OVERHEAD))))
+    expect(buildArrivals(null)).toBe(10)
+  })
+
+  it('offers an SLA contract once challengeStart is reached, on a 120-tick cadence', () => {
+    let game = withoutSources(newGame('startup'))
+    const scenario = SCENARIOS.find((s) => s.id === 'startup')!
+    game.tick = scenario.challengeStart - 1
+    game = simulate(game)
+    expect(game.slaContract).not.toBeNull()
+    expect(game.slaContract!.accepted).toBe(false)
+    expect(game.slaContract!.ticksRemaining).toBe(9) // SLA_DECISION_TICKS(10), minus this tick's own countdown
+  })
+
+  it('does not offer a second SLA contract while one is already active', () => {
+    let game = withoutSources(newGame('startup'))
+    const scenario = SCENARIOS.find((s) => s.id === 'startup')!
+    game.tick = scenario.challengeStart - 1
+    game = simulate(game)
+    const firstId = game.slaContract!.id
+    game.tick = scenario.challengeStart + 120 - 1 // one tick before the next 120-tick cadence
+    game = simulate(game)
+    expect(game.slaContract!.id).toBe(firstId)
+  })
+
+  it('acceptSlaContract starts the contract window; declineSlaContract clears a pending offer', () => {
+    const game = withoutSources(newGame('startup'))
+    game.slaContract = {
+      id: 'c1',
+      kind: 'delivery',
+      target: 10,
+      windowTicks: 50,
+      reward: 100,
+      penaltyScore: 200,
+      ticksRemaining: 6,
+      accepted: false,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    const accepted = acceptSlaContract(game)
+    expect(accepted.slaContract!.accepted).toBe(true)
+    expect(accepted.slaContract!.ticksRemaining).toBe(50)
+
+    const declined = declineSlaContract(game)
+    expect(declined.slaContract).toBeNull()
+  })
+
+  it('a pending SLA offer auto-declines after the decision window lapses', () => {
+    let game = withoutSources(newGame('startup'))
+    game.slaContract = {
+      id: 'c1',
+      kind: 'delivery',
+      target: 10,
+      windowTicks: 50,
+      reward: 100,
+      penaltyScore: 200,
+      ticksRemaining: 10,
+      accepted: false,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    for (let i = 0; i < 10; i++) game = simulate(game)
+    expect(game.slaContract).toBeNull()
+  })
+
+  it('an accepted latency contract sustained under target pays its reward once, then clears', () => {
+    let game = withoutSources(newGame('startup'))
+    game.budget = 0
+    game.slaContract = {
+      id: 'c1',
+      kind: 'latency',
+      target: 5,
+      windowTicks: 3,
+      reward: 100,
+      penaltyScore: 200,
+      ticksRemaining: 3,
+      accepted: true,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    game.recentLatencyTicks = 1 // well under target
+    for (let i = 0; i < 3; i++) game = simulate(game)
+    expect(game.budget).toBe(100)
+    expect(game.slaContract).toBeNull()
+  })
+
+  it('a latency contract survives a 4-tick breach spike but fails at 5 consecutive over-target ticks', () => {
+    let game = withoutSources(newGame('startup'))
+    game.score = 0
+    game.slaContract = {
+      id: 'c1',
+      kind: 'latency',
+      target: 2,
+      windowTicks: 50,
+      reward: 100,
+      penaltyScore: 200,
+      ticksRemaining: 50,
+      accepted: true,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    game.recentLatencyTicks = 5 // over target every tick
+    for (let i = 0; i < 4; i++) game = simulate(game)
+    expect(game.slaContract).not.toBeNull()
+    expect(game.slaContract!.breachStreak).toBe(4)
+    game = simulate(game)
+    expect(game.slaContract).toBeNull()
+    expect(game.score).toBe(-200)
+  })
+
+  it('a delivered non-junk packet counts toward an accepted delivery contract, paying out on target', () => {
+    let game = withoutSources(newGame('startup'))
+    game.budget = 0
+    const router = game.devices.find((d) => d.kind === 'router')!
+    const cloud = game.devices.find((d) => d.kind === 'cloud')!
+    game.slaContract = {
+      id: 'c1',
+      kind: 'delivery',
+      target: 1,
+      windowTicks: 50,
+      reward: 50,
+      penaltyScore: 100,
+      ticksRemaining: 50,
+      accepted: true,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    game.packets = [
+      {
+        id: 'p1',
+        path: [router.id, cloud.id],
+        hop: 0,
+        progress: 0.9,
+        priority: 'bulk',
+        owner: router.id,
+        source: router.id,
+        generatedTick: game.tick,
+        queuedTicks: 0,
+      },
+    ]
+    game = simulate(game)
+    expect(game.budget).toBe(50)
+    expect(game.slaContract).toBeNull()
+  })
+
+  it('a delivery contract fails and costs score if the window ends short of target', () => {
+    let game = withoutSources(newGame('startup'))
+    game.score = 500
+    game.slaContract = {
+      id: 'c1',
+      kind: 'delivery',
+      target: 100,
+      windowTicks: 2,
+      reward: 50,
+      penaltyScore: 100,
+      ticksRemaining: 2,
+      accepted: true,
+      breachStreak: 0,
+      deliveredSinceAccept: 0,
+    }
+    for (let i = 0; i < 2; i++) game = simulate(game)
+    expect(game.slaContract).toBeNull()
+    expect(game.score).toBe(400)
   })
 })

@@ -27,6 +27,7 @@ import { useSimulationClock } from './composables/useSimulationClock'
 import { TUTORIAL_STEPS, useTutorial } from './composables/useTutorial'
 import { deviceIcons } from './deviceIcons'
 import {
+  acceptSlaContract,
   addCable,
   buildDevice,
   CABLE_TIERS,
@@ -35,9 +36,12 @@ import {
   CACHE_HIT_RATE_MAX,
   CACHE_HIT_RATE_STEP,
   cycleCableVlan,
+  cycleQosBoost,
+  declineSlaContract,
   deleteCable,
   deviceCapacity,
   deviceRemovalRefund,
+  FORWARDING_KINDS,
   FORWARDING_SPEED_COSTS,
   FORWARDING_SPEED_GAIN,
   hubRange,
@@ -47,6 +51,7 @@ import {
   newGame,
   OUTAGE_RADIUS,
   PEAK_PERIOD_TICKS,
+  QOS_OVERHEAD,
   repairDevice,
   removeDevice,
   REPEATER_RANGE,
@@ -867,6 +872,8 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
         @exit-to-menu="screen = 'menu'"
         @toggle-pause="togglePause"
         @open-leaderboard="modal = 'leaderboard'"
+        @accept-sla="setGame(acceptSlaContract(game!))"
+        @decline-sla="setGame(declineSlaContract(game!))"
       />
       <div class="workspace" :class="{ 'inspector-open': picked || pickedCable }">
         <BuildPanel
@@ -1126,7 +1133,10 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
               </div>
               <div class="stat">
                 <span>Throughput</span
-                ><b>{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick' }}</b>
+                ><b
+                  >{{ picked.pps > 100 ? 'No limit' : picked.pps + ' pkt/tick'
+                  }}{{ picked.qosBoost ? ` (−${Math.round(QOS_OVERHEAD * 100)}% QoS)` : '' }}</b
+                >
               </div>
               <div
                 v-if="THROUGHPUT_KINDS.includes(picked.kind)"
@@ -1191,6 +1201,11 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                 ><b :class="{ 'danger-text': queueDepth(picked.id) > 0 }"
                   >{{ queueDepth(picked.id) }} waiting</b
                 >
+              </div>
+              <div v-if="FORWARDING_KINDS.includes(picked.kind)" class="device-upgrades">
+                <button @click="setGame(cycleQosBoost(game!, picked!.id))">
+                  QoS boost: {{ picked.qosBoost ?? 'none' }}
+                </button>
               </div>
               <div v-if="picked.kind === 'firewall'" class="device-upgrades">
                 <fieldset class="firewall-rules">
@@ -1517,6 +1532,12 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   extends that hub's Wi-Fi zone with a second one of its own, at the cost of a small
                   extra queue delay for clients it serves.
                 </li>
+                <li>
+                  Any router, switch, wireless access point, firewall, or load balancer can set a
+                  free <b>QoS boost</b> from its inspector: cycle none → realtime → stream → bulk →
+                  none. A boosted class sorts above everything else on arrival at that device, at
+                  the cost of 10% less effective throughput while a boost is set.
+                </li>
               </ol>
             </div>
             <div v-else-if="helpSection === 'Scoring & economy'">
@@ -1549,6 +1570,14 @@ function finishDeviceDrag(event: PointerEvent, device: Device) {
                   ISP Hub and Data Center pay <b>metered income</b> instead of a flat allocation:
                   every 15 ticks you're paid per packet delivered in that window (realtime pays
                   most, then stream, then bulk), capped at 3× the flat rate it replaces.
+                </li>
+                <li>
+                  Starting once challenge events do, an <b>SLA contract</b> is offered every 120
+                  ticks (top bar chip, one at a time): accept within 10 ticks or it auto-declines. A
+                  latency contract pays out if you hold below its target for the full 50-tick
+                  window, but fails immediately after 5 consecutive over-target ticks. A delivery
+                  contract pays out as soon as you hit its packet count. Either way, failure costs
+                  score (2× the reward), not budget — a real stake either direction.
                 </li>
               </ol>
             </div>

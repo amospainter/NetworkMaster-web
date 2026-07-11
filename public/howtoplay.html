@@ -286,6 +286,8 @@
 <p>of generated traffic targets another device on a different subnet (routed via the router) instead of the cloud — usually a server. This models internal traffic (e.g. desk-to-server) and rewards having more than one subnet reachable through your core.</p>
 <li><strong>Any topology edit</strong> (delete a cable, remove equipment, reroute, retag a</li>
 <p>VLAN, change a firewall rule) immediately clears in-flight packets, since their precomputed route may no longer be valid. The next tick rebuilds routes from the new topology.</p>
+<li><strong>QoS boost</strong>: any router, switch, wireless access point, firewall, or load</li>
+<p>balancer can set a free boost from its inspector, cycling none → realtime → stream → bulk → none. A boosted class always sorts above everything else arriving at that device that tick, regardless of its own base priority — but the device's effective admission capacity drops by 10% (floored at 1 pkt/tick) the whole time a boost is set. Displayed throughput in the inspector is unaffected; the tradeoff shows as a <code>(−10% QoS)</code> suffix instead, so the base number stays honest.</p>
 </ul>
 <h2 id="6-scoring">6. Scoring</h2>
 <ul>
@@ -310,6 +312,8 @@
 <p>allocation above, you're paid per packet delivered in that 15-tick window — 60¢ for realtime, 35¢ for stream, 20¢ for bulk — plus a $10 floor, capped at 3× what the flat allocation would have paid. Deliver well and it pays more than the flat rate; deliver nothing and you still get the $10 floor.</p>
 <li><strong>Budget bonus events</strong> (§9) add a flat $75.</li>
 <li><strong>Delivery milestones</strong> (§6) add a one-time budget award.</li>
+<li><strong>SLA contracts</strong>: from a scenario's first challenge-event window onward,</li>
+<p>an offer appears in the top bar every 120 ticks (only while none is active) — accept or decline within 10 ticks, or it auto-declines. Each offer is self-balanced against your current run: a <strong>latency</strong> contract asks you to hold delivery latency under a target for 50 ticks (fails immediately after 5 consecutive ticks over target); a <strong>delivery</strong> contract asks you to deliver a target packet count, paying out the moment you hit it. Reward is $80–200 (scaled by scenario difficulty) paid to budget on success; failure — a latency breach or a delivery contract that never reaches its count — costs double the reward in <strong>score</strong>, not budget. Sandbox runs still see contracts and pay/penalize normally.</p>
 <li><strong>Removing equipment or a cable</strong> refunds 90% of what you spent on it</li>
 <p>(build cost + every upgrade), rounded down.</p>
 <li><strong>Site Upgrades</strong> (top bar) bulk-apply an upgrade to every eligible piece</li>
@@ -513,10 +517,12 @@
 <ul>
 <li><strong>Score / multiplier</strong>, <strong>Delivered</strong>, <strong>Dropped</strong>, <strong>Combo</strong>, <strong>Budget</strong>,</li>
 <p>and <strong>Failure pressure</strong> (with a live bar) sit across the top.</p>
+<li>An <strong>SLA chip</strong> appears in the top bar whenever a contract is offered or</li>
+<p>active, showing its kind, target, reward, and ticks remaining, with Accept/Decline buttons while still pending.</p>
 <li><strong>Run Stats</strong> (footer button) adds delivered/dropped totals, clean combo,</li>
 <p>the rolling drop window, traffic ramp, and the two telemetry averages: <strong>average delivery latency</strong> (ticks from generation to arrival) and <strong>average queue delay</strong> (ticks spent waiting in a forwarding device's queue) — both rolling averages weighted 75% history / 25% latest tick. It also includes a <strong>run history chart</strong>: score, failure pressure, and latency plotted across the whole run so far. The same chart appears on the game-over screen once a run ends.</p>
 <li><strong>Device inspector</strong> shows status, ports, health/wear, throughput (with a</li>
-<p>live load bar for forwarding devices), delivered/generated, Wi-Fi link status, independent-path count, and — for wireless — current Wi-Fi generation and interference state.</p>
+<p>live load bar for forwarding devices, and a <code>(−10% QoS)</code> suffix while a boost is set), delivered/generated, Wi-Fi link status, independent-path count, and — for wireless — current Wi-Fi generation and interference state. Forwarding devices also show a QoS boost cycle button.</p>
 <li><strong>Cable inspector</strong> shows tier, live traffic, status, age, style, and VLAN,</li>
 <p>plus upgrade/reroute/delete actions.</p>
 <li><strong>Minimap</strong> (canvas corner) gives a always-visible overview of every device</li>
